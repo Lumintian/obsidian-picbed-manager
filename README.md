@@ -82,10 +82,9 @@ picbed-auto-upload: false
 
 ```bash
 npm install
-npm run typecheck
-npm run lint
-npm test
-npm run build
+npm run check
 ```
+
+`npm run check` is the canonical final gate: lint, type-check, unit tests, and production build run once each. Use focused commands such as `npm test -- tests/path-selector.test.ts` while iterating.
 
 The build produces `main.js`. Install `main.js`, `manifest.json`, and `styles.css` in a vault plugin directory named `picbed-manager` for manual testing.
