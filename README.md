@@ -17,7 +17,7 @@ Not currently included: drag/drop, command-based upload, multi-image upload, PDF
 
 ## Custom Upload API
 
-The plugin sends `multipart/form-data` with the image under the configured file field. The response must be JSON. Configure **Response URL path** with a dot path such as `url` or `data.link`.
+The plugin sends `multipart/form-data` with the image under the configured file field. The response must be JSON. Configure **Response URL path** with a dot path such as `url` or `data.link`. Numeric array indexes are supported (`0.publicUrl`), and a single-item root array is automatically unwrapped, so `publicUrl` also works for `[{ "publicUrl": "..." }]`.
 
 Example response:
 
@@ -35,9 +35,39 @@ Example response:
 
 Related profile paths:
 
-- Response URL path: `data.url`
-- Response asset ID path: `data.id` (optional)
-- Response delete descriptor path: `data.delete` (optional; retained for future deletion support only)
+- API endpoint: required; copy the full upload URL from the image host documentation.
+- Multipart file field: required; use the documented file parameter, commonly `file` or `image`.
+- Response URL path: required; for the example above use `data.url`.
+- HTTP headers: optional; add only authentication or custom headers required by the API.
+- Extra form fields: optional; add only documented multipart text parameters.
+- Response asset ID path: optional; for the example above use `data.id`.
+- Response delete descriptor path: optional; for the example above use `data.delete` and note that deletion is not implemented yet.
+
+The settings page includes a collapsible mapping guide, required/optional labels, examples, and a profile validation action. Multiple profiles are managed as horizontal tabs so only the selected profile's fields are shown.
+
+
+### CloudFlare ImgBed example
+
+For the [CloudFlare ImgBed upload API](https://cfbed.sanyue.de/api/upload.html), a normal upload profile can use:
+
+- API endpoint: `https://your.domain/upload` plus any required query parameters, for example `?authCode=YOUR_CODE&uploadChannel=telegram`
+- Multipart file field: `file`
+- Response URL path: `publicUrl` (recommended) or `0.publicUrl`
+- Response asset ID path: leave empty unless you have another stable ID mapping
+- Headers: optional; when using an API Token, add the authorization header required by your deployment
+
+Its successful response is a single-item root array:
+
+```json
+[
+  {
+    "src": "/file/abc123_image.jpg",
+    "publicUrl": "https://img.example.com/abc123_image.jpg"
+  }
+]
+```
+
+If `publicUrl` is not returned by the server configuration, use `0.src` only when `src` is already a usable URL, or configure the backend's default URL prefix / full return format according to its documentation.
 
 Per-note auto-upload can be overridden with frontmatter:
 

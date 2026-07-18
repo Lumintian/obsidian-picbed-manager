@@ -3,20 +3,91 @@
   gap: var(--size-4-3);
 }
 
-.picbed-manager-status-item {
+.picbed-manager-status-item,
+.picbed-manager-profile-panel,
+.picbed-manager-profile-guide {
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   padding: var(--size-4-3);
 }
 
-.picbed-manager-status-item p {
+.picbed-manager-status-item p,
+.picbed-manager-profile-guide p {
   margin: var(--size-4-1) 0;
+}
+
+.picbed-manager-profile-guide {
+  margin: var(--size-4-4) 0;
+}
+
+.picbed-manager-profile-guide summary {
+  cursor: pointer;
+  font-weight: var(--font-semibold);
+}
+
+.picbed-manager-api-example pre {
+  overflow-x: auto;
+  padding: var(--size-4-2);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+}
+
+.picbed-manager-profile-heading,
+.picbed-manager-profile-title,
+.picbed-manager-profile-actions,
+.picbed-manager-status-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+
+.picbed-manager-profile-heading,
+.picbed-manager-profile-title {
+  justify-content: space-between;
+}
+
+.picbed-manager-profile-tabs {
+  display: flex;
+  gap: var(--size-4-1);
+  overflow-x: auto;
+  padding-bottom: var(--size-4-2);
+  scrollbar-width: thin;
+}
+
+.picbed-manager-profile-tabs button {
+  flex: 0 0 auto;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border-color: transparent;
+}
+
+.picbed-manager-profile-tabs button.is-active {
+  color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.picbed-manager-profile-panel {
+  margin-top: var(--size-4-2);
 }
 
 .picbed-manager-profile-actions,
 .picbed-manager-status-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--size-4-2);
-  margin-top: var(--size-4-2);
+  margin-top: var(--size-4-4);
+}
+
+.picbed-manager-badge {
+  padding: 0 var(--size-4-2);
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-radius: var(--radius-l);
+  font-size: var(--font-ui-smaller);
+}
+
+.picbed-manager-section-description {
+  margin-top: calc(var(--size-4-2) * -1);
 }

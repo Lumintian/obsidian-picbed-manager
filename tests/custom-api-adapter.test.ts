@@ -32,6 +32,25 @@ describe("CustomApiAdapter", () => {
     });
   });
 
+  it("supports CloudFlare ImgBed single-item array responses", async () => {
+    const profile = cloneDefaultProfile();
+    profile.endpoint = "https://img.example.com/upload";
+    profile.responseUrlPath = "publicUrl";
+    const adapter = new CustomApiAdapter(async () => ({
+      status: 200,
+      text: JSON.stringify([
+        {
+          src: "/file/abc123_image.jpg",
+          publicUrl: "https://img.example.com/abc123_image.jpg",
+        },
+      ]),
+    }));
+
+    await expect(adapter.upload(source, profile)).resolves.toMatchObject({
+      url: "https://img.example.com/abc123_image.jpg",
+    });
+  });
+
   it("redacts secrets from transport errors", async () => {
     const transport = vi.fn(async () => {
       throw new Error("request failed with token top-secret");
