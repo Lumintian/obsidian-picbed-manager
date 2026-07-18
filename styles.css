@@ -1,0 +1,22 @@
+.picbed-manager-status-list {
+  display: grid;
+  gap: var(--size-4-3);
+}
+
+.picbed-manager-status-item {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: var(--size-4-3);
+}
+
+.picbed-manager-status-item p {
+  margin: var(--size-4-1) 0;
+}
+
+.picbed-manager-profile-actions,
+.picbed-manager-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}

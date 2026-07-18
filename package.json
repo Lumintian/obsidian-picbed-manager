@@ -1,0 +1,31 @@
+{
+  "name": "obsidian-picbed-manager",
+  "version": "0.1.0",
+  "description": "Upload pasted images from Obsidian to a configurable custom image hosting API.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "npm run typecheck && node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src tests"
+  },
+  "keywords": [
+    "obsidian",
+    "image-upload",
+    "picbed"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.15.17",
+    "esbuild": "^0.25.5",
+    "eslint": "^9.39.4",
+    "globals": "^17.6.0",
+    "obsidian": "latest",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.59.1",
+    "vitest": "^3.2.4"
+  }
+}
