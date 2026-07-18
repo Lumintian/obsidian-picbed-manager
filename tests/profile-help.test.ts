@@ -9,6 +9,7 @@ describe("profile field help", () => {
   });
 
   it("marks future deletion metadata as optional", () => {
+    expect(PROFILE_FIELD_HELP.responseUrlBase.required).toBe(false);
     expect(PROFILE_FIELD_HELP.responseAssetIdPath.required).toBe(false);
     expect(PROFILE_FIELD_HELP.responseDeletePayloadPath.required).toBe(false);
     expect(PROFILE_FIELD_HELP.headers.required).toBe(false);

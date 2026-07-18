@@ -169,6 +169,7 @@ export class PicbedManagerSettingTab extends PluginSettingTab {
     this.addProfileText(panel, profile, "endpoint");
     this.addProfileText(panel, profile, "fileField");
     this.addProfileText(panel, profile, "responseUrlPath");
+    this.addProfileText(panel, profile, "responseUrlBase");
     this.addProfileText(
       panel,
       profile,
@@ -411,6 +412,7 @@ type EditableProfileTextKey =
   | "endpoint"
   | "fileField"
   | "responseUrlPath"
+  | "responseUrlBase"
   | "responseAssetIdPath"
   | "responseDeletePayloadPath";
 

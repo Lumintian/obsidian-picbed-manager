@@ -16,9 +16,9 @@ export class MarkdownReferenceAdapter
     context: MarkdownReferenceContext,
     job: UploadJob,
   ): ReferenceAnchor {
-    const token = `picbed-manager://${job.id}`;
+    const token = createAnchorToken(job.id);
     context.editor.replaceSelection(
-      `![${escapeAltText(context.altText)}](${token} "Uploading…")`,
+      createStatusMarker(token, `Uploading ${context.altText || "image"}…`),
     );
     return { token };
   }
@@ -28,7 +28,7 @@ export class MarkdownReferenceAdapter
     anchor: ReferenceAnchor,
     result: AssetResult,
   ): Promise<void> {
-    replaceAnchoredImage(
+    replaceAnchoredMarker(
       context.editor,
       anchor.token,
       `![${escapeAltText(context.altText)}](${escapeMarkdownUrl(result.url)})`,
@@ -40,43 +40,56 @@ export class MarkdownReferenceAdapter
     anchor: ReferenceAnchor,
     error: UploadError,
   ): Promise<void> {
-    replaceAnchoredImage(
+    replaceAnchoredMarker(
       context.editor,
       anchor.token,
-      `![${escapeAltText(context.altText)}](${anchor.token} "Upload failed: ${escapeTitle(error.message)}")`,
+      createStatusMarker(
+        anchor.token,
+        `Upload failed: ${context.altText || "image"} — ${error.message}`,
+      ),
     );
   }
 }
 
-function replaceAnchoredImage(
+function createAnchorToken(jobId: string): string {
+  return `picbed-manager-upload:${jobId}`;
+}
+
+function createStatusMarker(token: string, text: string): string {
+  return `⏳ ${escapeStatusText(text)} <!-- ${token} -->`;
+}
+
+function replaceAnchoredMarker(
   editor: Editor,
   token: string,
   replacement: string,
 ): void {
   const content = editor.getValue();
-  const tokenOffset = content.indexOf(token);
-  if (tokenOffset === -1) {
+  const anchor = `<!-- ${token} -->`;
+  const anchorOffset = content.indexOf(anchor);
+  if (anchorOffset === -1) {
     throw new UploadError(
       "reference-conflict",
       "The upload marker was edited or removed before the upload finished.",
     );
   }
 
-  const imageStart = content.lastIndexOf("![", tokenOffset);
-  const lineEnd = content.indexOf("\n", tokenOffset);
-  const searchEnd = lineEnd === -1 ? content.length : lineEnd;
-  const imageEnd = content.lastIndexOf(")", searchEnd);
-  if (imageStart === -1 || imageEnd < tokenOffset) {
+  const lineStartOffset = content.lastIndexOf("\n", anchorOffset - 1) + 1;
+  const lineEndOffset = content.indexOf("\n", anchorOffset + anchor.length);
+  const markerEndOffset = lineEndOffset === -1 ? content.length : lineEndOffset;
+  const markerLine = content.slice(lineStartOffset, markerEndOffset);
+  const statusStartOffset = markerLine.lastIndexOf("⏳ ", anchorOffset - lineStartOffset);
+  if (!markerLine.includes(anchor) || statusStartOffset === -1) {
     throw new UploadError(
       "reference-conflict",
-      "The upload marker is no longer a valid Markdown image reference.",
+      "The upload marker is no longer valid.",
     );
   }
 
   editor.replaceRange(
     replacement,
-    offsetToPosition(content, imageStart),
-    offsetToPosition(content, imageEnd + 1),
+    offsetToPosition(content, lineStartOffset + statusStartOffset),
+    offsetToPosition(content, markerEndOffset),
   );
 }
 
@@ -100,6 +113,6 @@ function escapeMarkdownUrl(value: string): string {
     .replaceAll(")", "%29");
 }
 
-function escapeTitle(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+function escapeStatusText(value: string): string {
+  return value.replaceAll("\n", " ").replaceAll("-->", "—>");
 }

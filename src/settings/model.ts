@@ -21,6 +21,7 @@ export interface UploadProfile {
   extraFields: ExtraFieldSetting[];
   headers: HeaderSetting[];
   responseUrlPath: string;
+  responseUrlBase: string;
   responseAssetIdPath: string;
   responseDeletePayloadPath: string;
   timeoutMs: number;
@@ -50,6 +51,7 @@ export const DEFAULT_PROFILE: UploadProfile = {
   extraFields: [],
   headers: [],
   responseUrlPath: "url",
+  responseUrlBase: "",
   responseAssetIdPath: "",
   responseDeletePayloadPath: "",
   timeoutMs: 30_000,

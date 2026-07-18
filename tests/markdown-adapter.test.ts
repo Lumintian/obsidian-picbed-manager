@@ -46,7 +46,20 @@ const job = {
 };
 
 describe("MarkdownReferenceAdapter", () => {
-  it("replaces only its unique pending reference", async () => {
+  it("uses a non-resource-loading text marker", () => {
+    const editor = new FakeEditor();
+    const adapter = new MarkdownReferenceAdapter();
+    const context = { editor: editor as unknown as Editor, altText: "image.png" };
+
+    adapter.insertPending(context, job);
+
+    expect(editor.value).toContain("⏳ Uploading image.png…");
+    expect(editor.value).toContain("<!-- picbed-manager-upload:job-1 -->");
+    expect(editor.value).not.toContain("picbed-manager://");
+    expect(editor.value).not.toContain("![](");
+  });
+
+  it("replaces only its unique pending marker", async () => {
     const editor = new FakeEditor();
     const adapter = new MarkdownReferenceAdapter();
     const context = { editor: editor as unknown as Editor, altText: "image.png" };
@@ -60,8 +73,25 @@ describe("MarkdownReferenceAdapter", () => {
     });
 
     expect(editor.value).toBe(
-      "before ![image.png](https://img.test/a%20%281%29.png) and unrelated text",
+      "before ![image.png](https://img.test/a%20%281%29.png)",
     );
+  });
+
+  it("keeps a visible failed marker without loading a custom URL", async () => {
+    const editor = new FakeEditor();
+    const adapter = new MarkdownReferenceAdapter();
+    const context = { editor: editor as unknown as Editor, altText: "image.png" };
+    const anchor = adapter.insertPending(context, job);
+
+    await adapter.fail(
+      context,
+      anchor,
+      new UploadError("network", "Connection failed."),
+    );
+
+    expect(editor.value).toContain("Upload failed: image.png — Connection failed.");
+    expect(editor.value).toContain("<!-- picbed-manager-upload:job-1 -->");
+    expect(editor.value).not.toContain("picbed-manager://");
   });
 
   it("detects an edited or removed marker", async () => {

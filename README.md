@@ -52,7 +52,8 @@ For the [CloudFlare ImgBed upload API](https://cfbed.sanyue.de/api/upload.html),
 
 - API endpoint: `https://your.domain/upload` plus any required query parameters, for example `?authCode=YOUR_CODE&uploadChannel=telegram`
 - Multipart file field: `file`
-- Response URL path: `publicUrl` (recommended) or `0.publicUrl`
+- Response URL path: `publicUrl` when your backend returns it; otherwise use `src`
+- Response URL base: leave empty for `publicUrl`; when using a relative `src` such as `/file/...`, enter the image host origin, for example `https://your.domain`
 - Response asset ID path: leave empty unless you have another stable ID mapping
 - Headers: optional; when using an API Token, add the authorization header required by your deployment
 
@@ -67,7 +68,7 @@ Its successful response is a single-item root array:
 ]
 ```
 
-If `publicUrl` is not returned by the server configuration, use `0.src` only when `src` is already a usable URL, or configure the backend's default URL prefix / full return format according to its documentation.
+If `publicUrl` is not returned by the server configuration, configure **Response URL path** as `src` and **Response URL base** as the public image host origin. Alternatively, configure the backend's default URL prefix so future responses include `publicUrl`, or request its full return format where appropriate.
 
 Per-note auto-upload can be overridden with frontmatter:
 

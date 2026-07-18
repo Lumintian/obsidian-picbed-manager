@@ -52,8 +52,21 @@ function isArrayIndex(segment: string): boolean {
 }
 
 function buildMissingPathMessage(input: unknown, path: string): string {
-  if (Array.isArray(input) && input.length > 1 && !isArrayIndex(path.split(".")[0] ?? "")) {
+  if (
+    Array.isArray(input) &&
+    input.length > 1 &&
+    !isArrayIndex(path.split(".")[0] ?? "")
+  ) {
     return `Response path "${path}" was not found. The response root is an array with multiple items; start the path with an index such as "0.${path}".`;
   }
-  return `Response path "${path}" was not found.`;
+  const fields = describeAvailableFields(input);
+  return fields.length > 0
+    ? `Response path "${path}" was not found. Available response fields: ${fields.join(", ")}.`
+    : `Response path "${path}" was not found.`;
+}
+
+function describeAvailableFields(input: unknown): string[] {
+  const candidate = Array.isArray(input) && input.length === 1 ? input[0] : input;
+  if (candidate === null || typeof candidate !== "object") return [];
+  return Object.keys(candidate as Record<string, unknown>).slice(0, 10);
 }

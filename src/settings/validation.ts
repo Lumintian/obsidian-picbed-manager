@@ -24,6 +24,16 @@ export function validateProfile(profile: UploadProfile): ValidationResult {
   if (!profile.responseUrlPath.trim()) {
     errors.push("Response URL path is required.");
   }
+  if (profile.responseUrlBase.trim()) {
+    try {
+      const url = new URL(profile.responseUrlBase);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        errors.push("Response URL base must use HTTP or HTTPS.");
+      }
+    } catch {
+      errors.push("Response URL base must be a valid URL.");
+    }
+  }
   if (profile.timeoutMs < 1_000 || profile.timeoutMs > 300_000) {
     errors.push("Timeout must be between 1 and 300 seconds.");
   }

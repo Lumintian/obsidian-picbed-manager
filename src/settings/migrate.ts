@@ -63,6 +63,10 @@ function normalizeProfile(value: unknown, index: number): UploadProfile {
       typeof record.responseUrlPath === "string"
         ? record.responseUrlPath
         : fallback.responseUrlPath,
+    responseUrlBase:
+      typeof record.responseUrlBase === "string"
+        ? record.responseUrlBase
+        : "",
     responseAssetIdPath:
       typeof record.responseAssetIdPath === "string"
         ? record.responseAssetIdPath

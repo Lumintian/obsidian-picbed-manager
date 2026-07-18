@@ -19,6 +19,7 @@ import { SETTINGS_SCHEMA_VERSION } from "../src/settings/model";
     });
     expect(settings.defaultProfileId).toBe("custom");
     expect(settings.profiles[0]?.timeoutMs).toBe(300_000);
+    expect(settings.profiles[0]?.responseUrlBase).toBe("");
     expect(settings.behavior.retryCount).toBe(5);
     expect(settings.behavior.historyLimit).toBe(10);
   });

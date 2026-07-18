@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { CustomApiAdapter } from "../src/providers/custom-api/adapter";
+import {
+  CustomApiAdapter,
+  resolveResponseUrl,
+} from "../src/providers/custom-api/adapter";
 import { cloneDefaultProfile } from "../src/settings/model";
 
 const source = {
@@ -49,6 +52,27 @@ describe("CustomApiAdapter", () => {
     await expect(adapter.upload(source, profile)).resolves.toMatchObject({
       url: "https://img.example.com/abc123_image.jpg",
     });
+  });
+
+  it("resolves a relative src response against the configured base", async () => {
+    const profile = cloneDefaultProfile();
+    profile.endpoint = "https://img.example.com/upload";
+    profile.responseUrlPath = "src";
+    profile.responseUrlBase = "https://img.example.com";
+    const adapter = new CustomApiAdapter(async () => ({
+      status: 200,
+      text: JSON.stringify([{ src: "/file/abc123_image.jpg" }]),
+    }));
+
+    await expect(adapter.upload(source, profile)).resolves.toMatchObject({
+      url: "https://img.example.com/file/abc123_image.jpg",
+    });
+  });
+
+  it("rejects relative response URLs without a base", () => {
+    expect(() => resolveResponseUrl("/file/a.png", "")).toThrow(
+      "Configure Response URL base",
+    );
   });
 
   it("redacts secrets from transport errors", async () => {

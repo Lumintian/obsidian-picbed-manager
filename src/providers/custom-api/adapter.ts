@@ -81,7 +81,11 @@ export class CustomApiAdapter implements ProviderAdapter {
         });
       }
 
-      const url = getRequiredStringAtPath(payload, profile.responseUrlPath);
+      const selectedUrl = getRequiredStringAtPath(
+        payload,
+        profile.responseUrlPath,
+      );
+      const url = resolveResponseUrl(selectedUrl, profile.responseUrlBase);
       const assetId = profile.responseAssetIdPath.trim()
         ? getOptionalString(payload, profile.responseAssetIdPath)
         : undefined;
@@ -135,4 +139,30 @@ function getOptionalString(payload: unknown, path: string): string | undefined {
     );
   }
   return String(value);
+}
+
+export function resolveResponseUrl(value: string, base: string): string {
+  try {
+    return new URL(value).toString();
+  } catch {
+    if (!base.trim()) {
+      throw new UploadError(
+        "invalid-response-value",
+        `Response URL "${value}" is relative. Configure Response URL base, for example the image host origin.`,
+      );
+    }
+    try {
+      return new URL(value, ensureTrailingSlash(base.trim())).toString();
+    } catch (error) {
+      throw new UploadError(
+        "invalid-config",
+        "Response URL base must be a valid absolute HTTP(S) URL.",
+        { cause: error },
+      );
+    }
+  }
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
 }

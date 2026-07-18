@@ -3,6 +3,7 @@ export type ProfileHelpKey =
   | "endpoint"
   | "fileField"
   | "responseUrlPath"
+  | "responseUrlBase"
   | "responseAssetIdPath"
   | "responseDeletePayloadPath"
   | "timeout"
@@ -43,6 +44,13 @@ export const PROFILE_FIELD_HELP: Record<ProfileHelpKey, ProfileFieldHelp> = {
     description:
       "Dot path to the public image URL in the JSON response. Object example: data.url. For a single-item array such as [{ publicUrl: \"...\" }], enter publicUrl (0.publicUrl also works).",
     example: "data.url or publicUrl",
+  },
+  responseUrlBase: {
+    label: "Response URL base",
+    required: false,
+    description:
+      "Optional base URL used when the selected response value is relative, such as /file/example.jpg. Leave empty when the response path already returns an absolute URL.",
+    example: "https://img.example.com",
   },
   responseAssetIdPath: {
     label: "Response asset ID path",

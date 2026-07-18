@@ -53,6 +53,9 @@ describe("path selector", () => {
       UploadError,
     );
     expect(() =>
+      getRequiredStringAtPath([{ src: "/file/a.png" }], "publicUrl"),
+    ).toThrow("Available response fields: src");
+    expect(() =>
       getRequiredStringAtPath({ data: { url: 42 } }, "data.url"),
     ).toThrow("must contain a non-empty string");
   });
