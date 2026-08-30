@@ -98,7 +98,7 @@ function offsetToPosition(content: string, offset: number): EditorPosition {
   const lines = before.split("\n");
   return {
     line: lines.length - 1,
-    ch: lines.at(-1)?.length ?? 0,
+    ch: lines[lines.length - 1]?.length ?? 0,
   };
 }
 
