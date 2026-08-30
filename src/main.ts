@@ -3,7 +3,10 @@ import type { Editor, MarkdownFileInfo } from "obsidian";
 import type { AssetRecord, AssetSource } from "./domain/asset";
 import type { OperationHistoryEntry } from "./domain/upload-job";
 import { getSingleSupportedImage, noteAllowsAutoUpload } from "./ingestion/paste-policy";
-import { UploadCoordinator } from "./operations/upload-coordinator";
+import {
+  UploadCoordinator,
+  type UploadCoordinatorCallbacks,
+} from "./operations/upload-coordinator";
 import { migratePersistedState, type PersistedState } from "./persistence/state";
 import { CustomApiAdapter } from "./providers/custom-api/adapter";
 import { obsidianTransport } from "./providers/custom-api/obsidian-transport";
@@ -11,6 +14,7 @@ import {
   MarkdownReferenceAdapter,
   type MarkdownReferenceContext,
 } from "./references/markdown-adapter";
+import { ExcalidrawUploader } from "./integrations/excalidraw-uploader";
 import { createId } from "./shared/id";
 import { PicbedManagerSettingTab } from "./settings/settings-tab";
 import type { PluginSettings, UploadProfile } from "./settings/model";
@@ -20,22 +24,42 @@ export default class PicbedManagerPlugin extends Plugin {
   settings!: PluginSettings;
   private state!: PersistedState;
   private coordinator!: UploadCoordinator<MarkdownReferenceContext>;
+  private excalidrawUploader!: ExcalidrawUploader;
 
   async onload(): Promise<void> {
     await this.loadState();
+    const callbacks: UploadCoordinatorCallbacks = {
+      onJobChanged: () => undefined,
+      onAssetCreated: async (asset) => this.recordAsset(asset),
+      onHistory: async (entry) => this.recordHistory(entry),
+    };
+    const provider = new CustomApiAdapter(obsidianTransport);
     this.coordinator = new UploadCoordinator(
-      new CustomApiAdapter(obsidianTransport),
+      provider,
       new MarkdownReferenceAdapter(),
-      {
-        onJobChanged: () => undefined,
-        onAssetCreated: async (asset) => this.recordAsset(asset),
-        onHistory: async (entry) => this.recordHistory(entry),
-      },
+      callbacks,
     );
+    this.excalidrawUploader = new ExcalidrawUploader(this.app, provider, {
+      getProfile: () => this.getDefaultProfile(),
+      getRetryCount: () => this.settings.behavior.retryCount,
+      callbacks,
+      notify: (message) => new Notice(message),
+    });
 
     this.addSettingTab(new PicbedManagerSettingTab(this.app, this));
     this.addRibbonIcon("image-up", "Picbed upload status", () => {
       this.openStatus();
+    });
+    this.addCommand({
+      id: "upload-excalidraw-images",
+      name: "Upload images in current Excalidraw drawing",
+      checkCallback: (checking) => {
+        const canRun = this.excalidrawUploader.canRun();
+        if (canRun && !checking) {
+          void this.excalidrawUploader.uploadCurrentDrawing();
+        }
+        return canRun;
+      },
     });
     this.registerEvent(
       this.app.workspace.on("editor-paste", (event, editor, info) => {
@@ -162,13 +186,22 @@ export default class PicbedManagerPlugin extends Plugin {
 
   private openStatus(): void {
     new UploadStatusModal(this.app, {
-      jobs: () => this.coordinator.getJobs(),
+      jobs: () => [
+        ...this.coordinator.getJobs(),
+        ...this.excalidrawUploader.getJobs(),
+      ],
       history: () => this.state.history,
       retry: async (jobId) => {
-        const job = await this.coordinator.retry(
-          jobId,
-          this.settings.behavior.retryCount,
-        );
+        const markdownJob = this.coordinator.getJob(jobId);
+        const job = markdownJob
+          ? await this.coordinator.retry(
+              jobId,
+              this.settings.behavior.retryCount,
+            )
+          : await this.excalidrawUploader.retry(
+              jobId,
+              this.settings.behavior.retryCount,
+            );
         if (job.status !== "succeeded") {
           throw new Error(job.error?.message ?? "Retry failed.");
         }

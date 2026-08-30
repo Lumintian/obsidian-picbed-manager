@@ -1,6 +1,6 @@
 # Picbed Manager
 
-Picbed Manager is an Obsidian plugin for uploading a single pasted image to a configurable Custom Upload API and replacing the pending Markdown reference with the returned remote URL.
+Picbed Manager is an Obsidian plugin for uploading pasted Markdown images and local images from an Excalidraw drawing to a configurable Custom Upload API.
 
 ## MVP scope
 
@@ -11,9 +11,9 @@ Picbed Manager is an Obsidian plugin for uploading a single pasted image to a co
 - Retryable timeout, network, and server-side failures
 - Upload status/history view
 - Provider-neutral asset metadata for future deletion support
-- Reference-adapter boundary for future Excalidraw support
+- Excalidraw image upload command using ExcalidrawAutomate
 
-Not currently included: drag/drop, command-based upload, multi-image upload, PDF-specific behavior, Imgur-specific behavior, Excalidraw integration, or remote deletion.
+Not currently included: drag/drop, automatic Excalidraw paste interception, PDF-specific behavior, Imgur-specific behavior, or remote deletion.
 
 ## Custom Upload API
 
@@ -45,6 +45,9 @@ Related profile paths:
 
 The settings page includes a collapsible mapping guide, required/optional labels, examples, and a profile validation action. Multiple profiles are managed as horizontal tabs so only the selected profile's fields are shown.
 
+## Excalidraw
+
+With the [Excalidraw Obsidian plugin](https://github.com/zsviczian/obsidian-excalidraw-plugin) enabled, open a drawing and run **Upload images in current Excalidraw drawing** from the command palette. Selected image elements are uploaded; when no image is selected, the command asks whether to upload all image elements. Existing external image links and images that cannot be mapped to a vault file are left unchanged. The command uploads the file bytes through the selected Custom Upload API profile and keeps the local file, so it works on desktop and mobile without the PicGo Server path-list protocol.
 
 ### CloudFlare ImgBed example
 
