@@ -3,6 +3,7 @@
 .codex/
 AGENTS.md
 node_modules/
+.env
 main.js
 *.map
 coverage/

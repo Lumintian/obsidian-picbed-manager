@@ -91,3 +91,5 @@ pnpm check
 `pnpm check` is the canonical final gate: lint, type-check, unit tests, and production build run once each. Use focused commands such as `pnpm test tests/path-selector.test.ts` while iterating, and `pnpm coverage` for a coverage report (HTML output in `coverage/`).
 
 The build produces `main.js`. Install `main.js`, `manifest.json`, and `styles.css` in a vault plugin directory named `picbed-manager` for manual testing.
+
+To test against a vault while developing, copy `.env.example` to `.env` and set `OBSIDIAN_PLUGIN_DIR` to `<vault>/.obsidian/plugins/picbed-manager`. `pnpm dev` (watch mode) and `pnpm build` then copy `main.js`, `manifest.json`, and `styles.css` there after every successful build and add a `.hotreload` marker, so the [Hot Reload](https://github.com/pjeby/hot-reload) plugin reloads Picbed Manager automatically. `pnpm check` never writes to the vault.

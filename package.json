@@ -6,8 +6,8 @@
   "type": "module",
   "packageManager": "pnpm@12.5.1",
   "scripts": {
-    "dev": "node esbuild.config.mjs",
-    "build": "node esbuild.config.mjs production",
+    "dev": "node --env-file-if-exists=.env esbuild.config.mjs",
+    "build": "node --env-file-if-exists=.env esbuild.config.mjs production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
