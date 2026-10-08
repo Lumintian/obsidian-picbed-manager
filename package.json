@@ -4,6 +4,7 @@
   "description": "Upload pasted images and Excalidraw images from Obsidian to a configurable custom image hosting API.",
   "main": "main.js",
   "type": "module",
+  "packageManager": "pnpm@12.5.1",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
@@ -24,7 +25,7 @@
     "esbuild": "^0.28.2",
     "eslint": "^10.9.1",
     "globals": "^17.6.0",
-    "obsidian": "latest",
+    "obsidian": "1.13.1",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.59.1",
     "vitest": "^4.1.11"
