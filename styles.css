@@ -16,6 +16,10 @@
   margin: var(--size-4-1) 0;
 }
 
+.picbed-manager-status-item a {
+  overflow-wrap: anywhere;
+}
+
 .picbed-manager-profile-guide {
   margin: var(--size-4-4) 0;
 }

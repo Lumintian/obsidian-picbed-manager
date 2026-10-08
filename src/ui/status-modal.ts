@@ -37,6 +37,9 @@ export class UploadStatusModal extends Modal {
         row.createEl("strong", { text: item.fileName });
         row.createEl("p", { text: `Status: ${item.status}` });
         if (item.message) row.createEl("p", { text: item.message });
+        if (item.url) {
+          row.createEl("p").createEl("a", { text: item.url, href: item.url });
+        }
         if (item.retryable) {
           const actions = row.createDiv({ cls: "picbed-manager-status-actions" });
           const retry = actions.createEl("button", { text: "Retry" });
@@ -63,15 +66,22 @@ export class UploadStatusModal extends Modal {
   }
 }
 
-interface StatusItem {
+export interface StatusItem {
   id: string;
   fileName: string;
   status: string;
   message?: string;
+  /** The hosted URL, shown even when inserting the link failed. */
+  url?: string;
   retryable: boolean;
 }
 
-function mergeLatest(
+/**
+ * Combines saved history with this session's jobs, newest data winning.
+ * Only jobs still in memory can be retried; history from earlier sessions
+ * has no image bytes or document to retry with.
+ */
+export function mergeLatest(
   jobs: UploadJob[],
   history: OperationHistoryEntry[],
 ): StatusItem[] {
@@ -81,8 +91,9 @@ function mergeLatest(
       id: entry.id,
       fileName: entry.fileName,
       status: entry.status,
-      message: entry.errorMessage ?? entry.url,
-      retryable: entry.status === "failed",
+      message: entry.errorMessage,
+      url: entry.url,
+      retryable: false,
     });
   }
   for (const job of jobs) {
@@ -90,7 +101,8 @@ function mergeLatest(
       id: job.id,
       fileName: job.source.fileName,
       status: job.status,
-      message: job.error?.message ?? job.result?.url,
+      message: job.error?.message,
+      url: job.result?.url,
       retryable: job.status === "failed",
     });
   }

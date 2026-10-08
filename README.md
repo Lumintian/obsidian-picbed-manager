@@ -71,7 +71,7 @@ With the Excalidraw plugin enabled:
 
 ### Upload status
 
-Click the **Picbed upload status** icon in the ribbon to see recent uploads, their links or error messages, and a **Retry** button for failed ones. **Clear history** removes the saved list.
+Click the **Picbed upload status** icon in the ribbon to see recent uploads with their links and error messages. Uploads that failed since Obsidian started have a **Retry** button; older entries are kept for reference only. If an image was uploaded but its link could not be inserted, the hosted link is shown here so you can copy it. **Clear history** removes the saved list.
 
 ## Configuring your upload API
 
@@ -158,7 +158,7 @@ If your server does not return `publicUrl`, either use `src` with **Response URL
 
 - One image per paste. Drag and drop is not supported.
 - Paste in Canvas cards and in embedded or pop-up editors uses Obsidian's normal behavior and is not uploaded.
-- After a restart, **Retry** does not work for older failed uploads.
+- Failed uploads can be retried only until Obsidian restarts.
 - In Excalidraw, the `picbed-auto-upload` frontmatter setting is ignored.
 - The Excalidraw command can also pick up embedded notes, PDF pages, and other drawings, which are shown as images. Select only the images you want to upload instead of uploading everything.
 - A request that times out may still finish on the server, so a retry can leave a duplicate copy on your image host.

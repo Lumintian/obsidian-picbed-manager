@@ -4,7 +4,6 @@ Open problems found in code review, with a suggested direction for each. User-vi
 
 ## Bugs
 
-- **Retry fails for failed uploads from earlier sessions.** The status view offers **Retry** for every failed history entry, but jobs live only in memory, so after a restart it throws `Unknown upload operation`. *Direction:* offer Retry only for jobs that are still in memory.
 - **The Excalidraw command uploads embedded notes, PDF pages, and nested drawings.** These are image elements whose `getViewFileForImageElement()` returns a `.md` or `.pdf` file. They are uploaded as `application/octet-stream` and replaced with a link. *Direction:* only accept files whose extensions are in the supported image list.
 - **Excalidraw paste ignores the `picbed-auto-upload` frontmatter**, unlike Markdown notes.
 - **Clearing the timeout field saves 0 seconds**, so every upload fails validation until the field is fixed. After a reload the value is clamped to 1 second. *Direction:* validate the input and keep the last valid value.
@@ -27,7 +26,7 @@ Open problems found in code review, with a suggested direction for each. User-vi
 - The secret toggle next to a header has only a tooltip, which is not reachable on mobile.
 - **Remove profile** deletes immediately without confirmation.
 - **Validate profile** checks the settings only. A "test upload" that sends a small image and shows the raw response and resolved URL would make mapping much easier.
-- The status view does not update live, cannot cancel an upload, shows URLs as plain text, and has no timestamps or note links.
+- The status view does not update live, cannot cancel an upload, and has no timestamps or note links.
 - The Excalidraw "upload all images?" prompt uses `window.confirm` instead of an Obsidian `Modal`.
 - The Excalidraw command is always listed. `checkCallback` would hide it outside Excalidraw drawings; `ExcalidrawUploader.canRun()` already exists but is only used by tests.
 - Pasted screenshots are usually named `image.png`, which can collide on hosts that keep file names. A file-name template would help.
