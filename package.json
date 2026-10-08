@@ -12,6 +12,9 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "bump": "node scripts/version-bump.mjs",
+    "preversion": "node scripts/version-bump.mjs --preversion",
+    "version": "node scripts/version-bump.mjs --sync",
+    "postversion": "node scripts/version-bump.mjs --publish",
     "lint": "eslint src tests",
     "check": "eslint src tests && tsc --noEmit && vitest run && node esbuild.config.mjs production"
   },
