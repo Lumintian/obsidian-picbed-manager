@@ -7,6 +7,7 @@ import { UploadCoordinator } from "../operations/upload-coordinator";
 import {
   ExcalidrawReferenceAdapter,
   isExcalidrawImageElement,
+  queryDrawing,
   type ExcalidrawAutomateLike,
   type ExcalidrawElementLike,
   type ExcalidrawPasteHook,
@@ -29,7 +30,6 @@ type AppWithPluginManager = App & {
 };
 
 interface ExcalidrawPluginLike {
-  getAPI?: () => ExcalidrawAutomateLike;
   ea?: ExcalidrawAutomateLike;
 }
 
@@ -45,6 +45,13 @@ interface UploadCandidate {
 
 interface PreparedCandidate extends UploadCandidate {
   bytes: ArrayBuffer;
+}
+
+/** The drawing an upload belongs to and the API used to reach it. */
+interface DrawingTarget {
+  host: ExcalidrawAutomateLike;
+  view: unknown;
+  notePath: string | undefined;
 }
 
 export interface ExcalidrawUploadSummary {
@@ -98,13 +105,13 @@ export class ExcalidrawUploader {
     return (
       !this.running &&
       !!getActiveExcalidrawView(this.app) &&
-      !!getExcalidrawPlugin(this.app)
+      !!getExcalidrawHost(this.app)
     );
   }
 
   /** Registers the optional Excalidraw paste hook once the dependency is ready. */
   registerPasteHook(): boolean {
-    const host = getExcalidrawHookHost(this.app);
+    const host = getExcalidrawHost(this.app);
     if (!host) return false;
     if (this.hookHost === host) {
       return host.onPasteHook === this.pasteHook;
@@ -132,11 +139,16 @@ export class ExcalidrawUploader {
       }
 
       try {
-        data.ea.setView(data.view);
-        const beforeElementIds = new Set(
-          data.ea.getViewElements().map((element) => element.id),
+        const beforeElementIds = queryDrawing(
+          data.ea,
+          data.view,
+          (automate) =>
+            new Set(automate.getViewElements().map((element) => element.id)),
         );
-        this.schedulePastedImageUpload(data.ea, data.view, beforeElementIds);
+        this.schedulePastedImageUpload(
+          { host: data.ea, view: data.view, notePath: getNotePath(data.view) },
+          beforeElementIds,
+        );
       } catch {
         return previousResult ?? true;
       }
@@ -180,21 +192,21 @@ export class ExcalidrawUploader {
         return summary;
       }
 
-      const automate = getExcalidrawAutomate(this.app);
-      if (!automate) {
+      const host = getExcalidrawHost(this.app);
+      if (!host) {
         this.notify(
           "The Excalidraw plugin is unavailable or does not expose getAPI().",
         );
         return summary;
       }
-      automate.setView(view);
+      const target: DrawingTarget = { host, view, notePath: view.file?.path };
 
-      const selected = automate
-        .getViewSelectedElements()
-        .filter(isExcalidrawImageElement);
-      const allImages = automate
-        .getViewElements()
-        .filter(isExcalidrawImageElement);
+      const { selected, allImages } = queryDrawing(host, view, (automate) => ({
+        selected: automate
+          .getViewSelectedElements()
+          .filter(isExcalidrawImageElement),
+        allImages: automate.getViewElements().filter(isExcalidrawImageElement),
+      }));
       const chosen = chooseImages(selected, allImages, this.confirmUploadAll);
       summary.total = chosen.length;
       if (chosen.length === 0) {
@@ -204,7 +216,9 @@ export class ExcalidrawUploader {
         return summary;
       }
 
-      const candidates = getLocalCandidates(automate, chosen);
+      const candidates = queryDrawing(host, view, (automate) =>
+        getLocalCandidates(automate, chosen),
+      );
       summary.skipped += chosen.length - candidates.length;
       if (candidates.length === 0) {
         this.notify(
@@ -213,13 +227,7 @@ export class ExcalidrawUploader {
         return summary;
       }
 
-      await this.uploadCandidates(
-        automate,
-        view.file?.path,
-        profile,
-        candidates,
-        summary,
-      );
+      await this.uploadCandidates(target, profile, candidates, summary);
       this.reportSummary(summary);
       return summary;
     } catch (error) {
@@ -247,47 +255,41 @@ export class ExcalidrawUploader {
   }
 
   private schedulePastedImageUpload(
-    automate: ExcalidrawAutomateLike,
-    view: unknown,
+    target: DrawingTarget,
     beforeElementIds: ReadonlySet<string>,
     attempt = 0,
   ): void {
     const poll = (): void => {
       if (!this.isAutomaticPasteUploadEnabled()) return;
       try {
-        automate.setView(view);
-        const newImages = automate
-          .getViewElements()
-          .filter((element) => !beforeElementIds.has(element.id))
-          .filter(isExcalidrawImageElement);
-        if (newImages.length > 0) {
-          const candidates = getLocalCandidates(automate, newImages);
-          if (candidates.length > 0) {
-            if (this.running) {
-              if (attempt < PASTE_POLL_ATTEMPTS) {
-                setTimeout(
-                  () =>
-                    this.schedulePastedImageUpload(
-                      automate,
-                      view,
-                      beforeElementIds,
-                      attempt + 1,
-                    ),
-                  PASTE_POLL_DELAY_MS,
-                );
-              }
-              return;
+        const candidates = queryDrawing(target.host, target.view, (automate) =>
+          getLocalCandidates(
+            automate,
+            automate
+              .getViewElements()
+              .filter((element) => !beforeElementIds.has(element.id))
+              .filter(isExcalidrawImageElement),
+          ),
+        );
+        if (candidates.length > 0) {
+          if (this.running) {
+            if (attempt < PASTE_POLL_ATTEMPTS) {
+              setTimeout(
+                () =>
+                  this.schedulePastedImageUpload(
+                    target,
+                    beforeElementIds,
+                    attempt + 1,
+                  ),
+                PASTE_POLL_DELAY_MS,
+              );
             }
-            const profile = this.options.getProfile();
-            if (!profile || !profile.endpoint.trim()) return;
-            void this.uploadPastedCandidates(
-              automate,
-              getNotePath(view),
-              profile,
-              candidates,
-            );
             return;
           }
+          const profile = this.options.getProfile();
+          if (!profile || !profile.endpoint.trim()) return;
+          void this.uploadPastedCandidates(target, profile, candidates);
+          return;
         }
       } catch {
         // The view may still be creating the pasted file; poll again below.
@@ -297,8 +299,7 @@ export class ExcalidrawUploader {
         setTimeout(
           () =>
             this.schedulePastedImageUpload(
-              automate,
-              view,
+              target,
               beforeElementIds,
               attempt + 1,
             ),
@@ -311,8 +312,7 @@ export class ExcalidrawUploader {
   }
 
   private async uploadPastedCandidates(
-    automate: ExcalidrawAutomateLike,
-    notePath: string | undefined,
+    target: DrawingTarget,
     profile: UploadProfile,
     candidates: readonly UploadCandidate[],
   ): Promise<void> {
@@ -321,13 +321,7 @@ export class ExcalidrawUploader {
     const summary = createEmptySummary();
     summary.total = candidates.length;
     try {
-      await this.uploadCandidates(
-        automate,
-        notePath,
-        profile,
-        candidates,
-        summary,
-      );
+      await this.uploadCandidates(target, profile, candidates, summary);
       this.reportSummary(summary);
     } catch (error) {
       this.notify(
@@ -341,8 +335,7 @@ export class ExcalidrawUploader {
   }
 
   private async uploadCandidates(
-    automate: ExcalidrawAutomateLike,
-    notePath: string | undefined,
+    target: DrawingTarget,
     profile: UploadProfile,
     candidates: readonly UploadCandidate[],
     summary: ExcalidrawUploadSummary,
@@ -353,18 +346,8 @@ export class ExcalidrawUploader {
       return;
     }
 
-    automate.copyViewElementsToEAforEditing(
-      prepared.map((candidate) => candidate.element),
-      true,
-    );
     for (const candidate of prepared) {
-      await this.uploadCandidate(
-        automate,
-        notePath,
-        profile,
-        candidate,
-        summary,
-      );
+      await this.uploadCandidate(target, profile, candidate, summary);
     }
   }
 
@@ -392,8 +375,7 @@ export class ExcalidrawUploader {
   }
 
   private async uploadCandidate(
-    automate: ExcalidrawAutomateLike,
-    notePath: string | undefined,
+    target: DrawingTarget,
     profile: UploadProfile,
     candidate: PreparedCandidate,
     summary: ExcalidrawUploadSummary,
@@ -406,11 +388,17 @@ export class ExcalidrawUploader {
       origin: "excalidraw",
     };
     const context: ExcalidrawReferenceContext = {
-      automate,
+      host: target.host,
+      view: target.view,
       elementId: candidate.element.id,
       fileId: candidate.element.fileId,
     };
-    const job = this.coordinator.create(source, profile, context, notePath);
+    const job = this.coordinator.create(
+      source,
+      profile,
+      context,
+      target.notePath,
+    );
     const completed = await this.coordinator.run(
       job.id,
       this.options.getRetryCount(),
@@ -465,40 +453,21 @@ export function getActiveExcalidrawView(
   return viewType?.toLowerCase() === "excalidraw" ? view : undefined;
 }
 
-export function getExcalidrawPlugin(
+/**
+ * Returns the Excalidraw plugin's ExcalidrawAutomate instance. It receives
+ * view hooks such as `onPasteHook`, and its `getAPI()` creates the private
+ * instances Picbed uses for reading and committing drawings.
+ */
+export function getExcalidrawHost(
   app: App,
-): ExcalidrawPluginLike | undefined {
+): ExcalidrawAutomateLike | undefined {
   const manager = (app as AppWithPluginManager).plugins;
   const plugin =
     manager?.plugins?.[EXCALIDRAW_PLUGIN_ID] ??
     manager?.getPlugin?.(EXCALIDRAW_PLUGIN_ID);
   if (typeof plugin !== "object" || plugin === null) return undefined;
-  const excalidrawPlugin = plugin as ExcalidrawPluginLike;
-  return typeof excalidrawPlugin.getAPI === "function" || excalidrawPlugin.ea
-    ? excalidrawPlugin
-    : undefined;
-}
-
-function getExcalidrawAutomate(app: App): ExcalidrawAutomateLike | undefined {
-  const plugin = getExcalidrawPlugin(app);
-  if (!plugin) return undefined;
-  if (plugin.getAPI) {
-    try {
-      const automate = plugin.getAPI();
-      if (automate) return automate;
-    } catch {
-      // Fall back to the plugin's shared automation instance below.
-    }
-  }
-  return plugin.ea;
-}
-
-function getExcalidrawHookHost(
-  app: App,
-): ExcalidrawAutomateLike | undefined {
-  const plugin = getExcalidrawPlugin(app);
-  if (!plugin) return undefined;
-  return plugin.ea ?? getExcalidrawAutomate(app);
+  const host = (plugin as ExcalidrawPluginLike).ea;
+  return typeof host?.getAPI === "function" ? host : undefined;
 }
 
 function chooseImages(

@@ -8,6 +8,7 @@ export interface ExcalidrawElementLike {
   id: string;
   type: string;
   fileId?: string | null;
+  isDeleted?: boolean;
 }
 
 /** The public image workbench shape exposed by ExcalidrawAutomate. */
@@ -35,7 +36,8 @@ export type ExcalidrawPasteHook = (
 /** The public ExcalidrawAutomate methods used by Picbed Manager. */
 export interface ExcalidrawAutomateLike {
   onPasteHook?: ExcalidrawPasteHook | null;
-  setView(view: unknown): unknown;
+  /** Creates a new instance with its own empty workbench, bound to `view`. */
+  getAPI(view?: unknown): ExcalidrawAutomateLike;
   getViewSelectedElements(includeFrameChildren?: boolean): readonly ExcalidrawElementLike[];
   getViewElements(): readonly ExcalidrawElementLike[];
   getViewFileForImageElement(
@@ -45,18 +47,43 @@ export interface ExcalidrawAutomateLike {
     elements: readonly ExcalidrawElementLike[],
     copyImages?: boolean,
   ): void;
-  getElement(id: string): ExcalidrawElementLike | null | undefined;
   imagesDict: Record<string, ExcalidrawImageInfoLike>;
   addElementsToView(
     repositionToCursor?: boolean,
     save?: boolean,
   ): Promise<boolean>;
+  clear(): void;
+  destroy?(): void;
 }
 
 export interface ExcalidrawReferenceContext {
-  automate: ExcalidrawAutomateLike;
+  /** Any ExcalidrawAutomate instance; only used to open private workbenches. */
+  host: ExcalidrawAutomateLike;
+  /** The Excalidraw view that owns the image. */
+  view: unknown;
   elementId: string;
   fileId: string;
+}
+
+/**
+ * Runs a read-only query on a short-lived ExcalidrawAutomate bound to `view`.
+ */
+export function queryDrawing<T>(
+  host: ExcalidrawAutomateLike,
+  view: unknown,
+  query: (automate: ExcalidrawAutomateLike) => T,
+): T {
+  const automate = host.getAPI(view);
+  try {
+    return query(automate);
+  } finally {
+    releaseAutomate(automate);
+  }
+}
+
+function releaseAutomate(automate: ExcalidrawAutomateLike): void {
+  automate.clear();
+  automate.destroy?.();
 }
 
 /**
@@ -79,8 +106,11 @@ export function asExternalImageInfo(
 
 /**
  * Commits an uploaded image through ExcalidrawAutomate's workbench API.
- * Excalidraw scene elements are immutable, so the image metadata is changed
- * in `imagesDict` and then committed with `addElementsToView`.
+ * The plugin-global ExcalidrawAutomate is shared with Excalidraw scripts and
+ * `addElementsToView` writes back everything staged on a workbench, so every
+ * commit stages only its own image on a private instance. The image is copied
+ * from the live scene right before committing, which keeps edits made while
+ * the upload was running and leaves images deleted in the meantime deleted.
  */
 export class ExcalidrawReferenceAdapter
   implements ReferenceAdapter<ExcalidrawReferenceContext>
@@ -94,37 +124,54 @@ export class ExcalidrawReferenceAdapter
     anchor: ReferenceAnchor,
     result: AssetResult,
   ): Promise<void> {
-    const element = context.automate.getElement(anchor.token);
-    if (
-      !element ||
-      element.type !== "image" ||
-      element.fileId !== context.fileId
-    ) {
-      throw new UploadError(
-        "reference-conflict",
-        "The Excalidraw image was edited or removed before the upload finished.",
-      );
-    }
+    const automate = context.host.getAPI(context.view);
+    try {
+      const element = automate
+        .getViewElements()
+        .find((candidate) => candidate.id === anchor.token);
+      if (
+        !element ||
+        element.isDeleted ||
+        element.type !== "image" ||
+        element.fileId !== context.fileId
+      ) {
+        throw new UploadError(
+          "reference-conflict",
+          "The Excalidraw image was edited, removed, or closed before the upload finished.",
+        );
+      }
 
-    const imageInfo = context.automate.imagesDict[context.fileId];
-    if (!imageInfo) {
-      throw new UploadError(
-        "reference-conflict",
-        "The Excalidraw image data is no longer available.",
-      );
-    }
+      try {
+        automate.copyViewElementsToEAforEditing([element], true);
+      } catch (error) {
+        throw new UploadError(
+          "reference-conflict",
+          "The Excalidraw image data is no longer available.",
+          { cause: error },
+        );
+      }
+      const imageInfo = automate.imagesDict[context.fileId];
+      if (!imageInfo) {
+        throw new UploadError(
+          "reference-conflict",
+          "The Excalidraw image data is no longer available.",
+        );
+      }
 
-    context.automate.imagesDict[context.fileId] = asExternalImageInfo(
-      imageInfo,
-      context.fileId,
-      result.url,
-    );
-    const saved = await context.automate.addElementsToView(false, true);
-    if (!saved) {
-      throw new UploadError(
-        "reference-conflict",
-        "Excalidraw could not save the uploaded image reference.",
+      automate.imagesDict[context.fileId] = asExternalImageInfo(
+        imageInfo,
+        context.fileId,
+        result.url,
       );
+      const saved = await automate.addElementsToView(false, true);
+      if (!saved) {
+        throw new UploadError(
+          "reference-conflict",
+          "Excalidraw could not save the uploaded image reference.",
+        );
+      }
+    } finally {
+      releaseAutomate(automate);
     }
   }
 

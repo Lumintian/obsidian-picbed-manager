@@ -1,70 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
-import type { App, TFile } from "obsidian";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { App } from "obsidian";
+import type { AssetResult } from "../src/domain/asset";
 import { UploadError } from "../src/domain/errors";
 import type { ProviderAdapter } from "../src/domain/provider";
 import {
   ExcalidrawUploader,
   type ExcalidrawUploadSummary,
 } from "../src/integrations/excalidraw-uploader";
-import type {
-  ExcalidrawAutomateLike,
-  ExcalidrawElementLike,
-} from "../src/references/excalidraw-adapter";
 import { cloneDefaultProfile } from "../src/settings/model";
-
-const file = {
-  name: "diagram.png",
-  extension: "png",
-  path: "attachments/diagram.png",
-} as TFile;
+import {
+  createExcalidrawApp,
+  FakeExcalidrawAutomate,
+  FakeExcalidrawView,
+  vaultFile,
+} from "./support/fake-excalidraw";
 
 function configuredProfile() {
   const profile = cloneDefaultProfile();
   profile.endpoint = "https://api.test/upload";
   return profile;
-}
-
-function createApp(
-  automate: ExcalidrawAutomateLike,
-  vaultReadBinary: ReturnType<typeof vi.fn> = vi.fn(async () => new ArrayBuffer(2)),
-): App {
-  return {
-    workspace: {
-      activeLeaf: {
-        view: {
-          getViewType: () => "Excalidraw",
-          file,
-        },
-      },
-    },
-    vault: { readBinary: vaultReadBinary },
-    plugins: {
-      plugins: {
-        "obsidian-excalidraw-plugin": { getAPI: () => automate },
-      },
-    },
-  } as unknown as App;
-}
-
-function createAutomate(
-  element: ExcalidrawElementLike & { fileId: string },
-  fileForElement: TFile | null = file,
-): ExcalidrawAutomateLike {
-  return {
-    setView: vi.fn(),
-    getViewSelectedElements: vi.fn(() => [element]),
-    getViewElements: vi.fn(() => [element]),
-    getViewFileForImageElement: vi.fn(() => fileForElement),
-    copyViewElementsToEAforEditing: vi.fn(),
-    getElement: vi.fn(() => element),
-    imagesDict: {
-      [element.fileId]: {
-        id: element.fileId,
-        file: fileForElement,
-      },
-    },
-    addElementsToView: vi.fn(async () => true),
-  };
 }
 
 function createUploader(
@@ -92,23 +46,56 @@ function createUploader(
   );
 }
 
-const uploadedResult = {
-  url: "https://img.test/diagram.png",
-  profileId: "default",
-  uploadedAt: "2026-07-18T00:00:00.000Z",
-};
+function createDrawing(name = "Drawing.excalidraw.md") {
+  return new FakeExcalidrawView(vaultFile(name));
+}
+
+function uploadedTo(url: string): AssetResult {
+  return { url, profileId: "default", uploadedAt: "2026-07-18T00:00:00.000Z" };
+}
+
+const uploadedResult = uploadedTo("https://img.test/diagram.png");
+
+/** Runs the paste hook, then inserts the image as Excalidraw's native paste does. */
+function pasteImage(
+  host: FakeExcalidrawAutomate,
+  view: FakeExcalidrawView,
+  elementId: string,
+  fileId: string,
+): boolean | void {
+  const clipboardFile = { name: "pasted.png", type: "image/png" } as File;
+  const clipboardData = {
+    files: { length: 1, item: () => clipboardFile },
+  } as unknown as DataTransfer;
+  const result = host.onPasteHook?.({
+    ea: host,
+    payload: {},
+    event: { clipboardData } as ClipboardEvent,
+    excalidrawFile: view.file,
+    view,
+    pointerPosition: { x: 0, y: 0 },
+  });
+  view.addImage(elementId, fileId, vaultFile(`${fileId}.png`));
+  return result;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("ExcalidrawUploader", () => {
   it("uploads a selected local image and commits its remote hyperlink", async () => {
-    const element = { id: "element-1", type: "image", fileId: "file-1" };
-    const automate = createAutomate(element);
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("diagram.png"));
+    view.selectedIds.add("element-1");
+    const host = new FakeExcalidrawAutomate();
     const upload = vi.fn<ProviderAdapter["upload"]>(async (source) => {
       expect(source.origin).toBe("excalidraw");
       expect(source.fileName).toBe("diagram.png");
       expect(source.mimeType).toBe("image/png");
       return uploadedResult;
     });
-    const uploader = createUploader(createApp(automate), upload);
+    const uploader = createUploader(createExcalidrawApp(host, view), upload);
 
     const summary = await uploader.uploadCurrentDrawing();
 
@@ -120,27 +107,80 @@ describe("ExcalidrawUploader", () => {
       cancelled: 0,
     });
     expect(upload).toHaveBeenCalledOnce();
-    expect(automate.setView).toHaveBeenCalledOnce();
-    expect(automate.copyViewElementsToEAforEditing).toHaveBeenCalledWith(
-      [element],
-      true,
-    );
-    expect(automate.imagesDict["file-1"]).toMatchObject({
+    expect(view.files["file-1"]).toMatchObject({
       file: null,
       isHyperLink: true,
       hyperlink: uploadedResult.url,
     });
   });
 
+  it("never stages elements on the Excalidraw plugin's shared instance", async () => {
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("diagram.png"));
+    view.selectedIds.add("element-1");
+    const host = new FakeExcalidrawAutomate();
+    const uploader = createUploader(
+      createExcalidrawApp(host, view),
+      vi.fn(async () => uploadedResult),
+    );
+
+    await uploader.uploadCurrentDrawing();
+
+    expect(host.elementsDict).toEqual({});
+    expect(host.imagesDict).toEqual({});
+    expect(host.instances.length).toBeGreaterThan(0);
+    expect(host.instances.every((instance) => instance.destroyed)).toBe(true);
+  });
+
+  it("keeps edits made to other images while a batch is uploading", async () => {
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("one.png"));
+    view.addImage("element-2", "file-2", vaultFile("two.png"));
+    view.selectedIds = new Set(["element-1", "element-2"]);
+    const host = new FakeExcalidrawAutomate();
+    const upload = vi.fn<ProviderAdapter["upload"]>(async (source) => {
+      if (source.fileName === "one.png") {
+        // The user moves the second image while the first one uploads.
+        view.edit("element-2", { x: 500 });
+      }
+      return uploadedTo(`https://img.test/${source.fileName}`);
+    });
+    const uploader = createUploader(createExcalidrawApp(host, view), upload);
+
+    const summary = await uploader.uploadCurrentDrawing();
+
+    expect(summary.uploaded).toBe(2);
+    expect(view.element("element-2")?.x).toBe(500);
+    expect(view.files["file-2"]?.hyperlink).toBe("https://img.test/two.png");
+  });
+
+  it("does not restore an image deleted while it was uploading", async () => {
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("diagram.png"));
+    view.selectedIds.add("element-1");
+    const host = new FakeExcalidrawAutomate();
+    const upload = vi.fn<ProviderAdapter["upload"]>(async () => {
+      view.edit("element-1", { isDeleted: true });
+      return uploadedResult;
+    });
+    const uploader = createUploader(createExcalidrawApp(host, view), upload);
+
+    const summary = await uploader.uploadCurrentDrawing();
+
+    expect(summary.failed).toBe(1);
+    expect(view.element("element-1")?.isDeleted).toBe(true);
+  });
+
   it("asks before uploading all images when no image is selected", async () => {
-    const element = { id: "element-1", type: "image", fileId: "file-1" };
-    const automate = createAutomate(element);
-    automate.getViewSelectedElements = vi.fn(() => []);
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("diagram.png"));
     const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
     const confirmUploadAll = vi.fn(() => false);
-    const uploader = createUploader(createApp(automate), upload, {
-      confirmUploadAll,
-    });
+    const uploader = createUploader(
+      createExcalidrawApp(new FakeExcalidrawAutomate(), view),
+      upload,
+      { confirmUploadAll },
+    );
 
     const summary = await uploader.uploadCurrentDrawing();
 
@@ -150,102 +190,101 @@ describe("ExcalidrawUploader", () => {
   });
 
   it("leaves a local image unchanged when uploading fails", async () => {
-    const element = { id: "element-1", type: "image", fileId: "file-1" };
-    const automate = createAutomate(element);
+    const view = createDrawing();
+    const file = vaultFile("diagram.png");
+    view.addImage("element-1", "file-1", file);
+    view.selectedIds.add("element-1");
     const upload = vi.fn<ProviderAdapter["upload"]>(async () => {
       throw new UploadError("network", "offline");
     });
-    const uploader = createUploader(createApp(automate), upload);
+    const uploader = createUploader(
+      createExcalidrawApp(new FakeExcalidrawAutomate(), view),
+      upload,
+    );
 
     const summary = await uploader.uploadCurrentDrawing();
 
     expect(summary.failed).toBe(1);
-    expect(automate.imagesDict["file-1"]).toMatchObject({ file });
-    expect(automate.imagesDict["file-1"]).not.toHaveProperty("isHyperLink");
-    expect(automate.imagesDict["file-1"]).not.toHaveProperty("hyperlink");
-    expect(automate.addElementsToView).not.toHaveBeenCalled();
+    expect(view.files["file-1"]).toMatchObject({ file });
+    expect(view.files["file-1"]?.isHyperLink).toBeUndefined();
   });
 
   it("chains an existing paste hook and restores it on dispose", () => {
-    const element = { id: "element-1", type: "image", fileId: "file-1" };
-    const automate = createAutomate(element);
+    const host = new FakeExcalidrawAutomate();
+    const view = createDrawing();
     const previous = vi.fn(() => true);
-    automate.onPasteHook = previous;
-    const uploader = createUploader(createApp(automate), vi.fn(async () => uploadedResult));
+    host.onPasteHook = previous;
+    const uploader = createUploader(
+      createExcalidrawApp(host, view),
+      vi.fn(async () => uploadedResult),
+    );
 
     expect(uploader.registerPasteHook()).toBe(true);
-    const hook = automate.onPasteHook;
+    const hook = host.onPasteHook;
     expect(hook).toBeTypeOf("function");
     expect(
       hook?.({
-        ea: automate,
+        ea: host,
         payload: {},
         event: { clipboardData: null } as ClipboardEvent,
-        excalidrawFile: file,
-        view: {},
+        excalidrawFile: view.file,
+        view,
         pointerPosition: { x: 0, y: 0 },
       }),
     ).toBe(true);
     expect(previous).toHaveBeenCalledOnce();
 
     uploader.dispose();
-    expect(automate.onPasteHook).toBe(previous);
+    expect(host.onPasteHook).toBe(previous);
   });
 
   it("lets native image paste happen, then uploads the new local element", async () => {
     vi.useFakeTimers();
-    try {
-      const oldElement = { id: "element-1", type: "image", fileId: "file-1" };
-      const newElement = { id: "element-2", type: "image", fileId: "file-2" };
-      const elements = [oldElement] as (typeof oldElement | typeof newElement)[];
-      const automate = createAutomate(oldElement);
-      automate.getViewElements = vi.fn(() => elements);
-      automate.getElement = vi.fn((id) => elements.find((element) => element.id === id));
-      automate.getViewFileForImageElement = vi.fn(() => file);
-      automate.imagesDict["file-2"] = {
-        id: "file-2",
-        file,
-      };
-      const clipboardFile = { name: "pasted.png", type: "image/png" } as File;
-      const clipboardData = {
-        files: { length: 1, item: () => clipboardFile },
-      } as unknown as DataTransfer;
-      const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
-      const uploader = createUploader(createApp(automate), upload);
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("existing.png"));
+    const host = new FakeExcalidrawAutomate();
+    const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
+    const uploader = createUploader(createExcalidrawApp(host, view), upload);
 
-      expect(uploader.registerPasteHook()).toBe(true);
-      const result = automate.onPasteHook?.({
-        ea: automate,
-        payload: {},
-        event: { clipboardData } as ClipboardEvent,
-        excalidrawFile: file,
-        view: {},
-        pointerPosition: { x: 0, y: 0 },
-      });
-      expect(result).toBe(true);
+    expect(uploader.registerPasteHook()).toBe(true);
+    expect(pasteImage(host, view, "element-2", "file-2")).toBe(true);
+    await vi.runAllTimersAsync();
 
-      // This represents Excalidraw's native paste completing after the hook.
-      elements.push(newElement);
-      await vi.runOnlyPendingTimersAsync();
+    expect(upload).toHaveBeenCalledOnce();
+    expect(view.files["file-2"]).toMatchObject({
+      file: null,
+      isHyperLink: true,
+      hyperlink: uploadedResult.url,
+    });
+    expect(view.files["file-1"]?.isHyperLink).toBeUndefined();
+  });
 
-      expect(upload).toHaveBeenCalledOnce();
-      expect(automate.imagesDict["file-2"]).toMatchObject({
-        file: null,
-        isHyperLink: true,
-        hyperlink: uploadedResult.url,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+  it("does not copy images from one drawing into another", async () => {
+    vi.useFakeTimers();
+    const first = createDrawing("First.excalidraw.md");
+    const second = createDrawing("Second.excalidraw.md");
+    const host = new FakeExcalidrawAutomate();
+    const uploader = createUploader(
+      createExcalidrawApp(host, first),
+      vi.fn(async () => uploadedResult),
+    );
+    uploader.registerPasteHook();
+
+    pasteImage(host, first, "first-image", "file-1");
+    await vi.runAllTimersAsync();
+    first.edit("first-image", { x: 300 });
+    pasteImage(host, second, "second-image", "file-2");
+    await vi.runAllTimersAsync();
+
+    expect(second.elements.map((element) => element.id)).toEqual(["second-image"]);
+    expect(first.element("first-image")?.x).toBe(300);
   });
 
   it("does not run when the Excalidraw plugin is unavailable", async () => {
-    const element = { id: "element-1", type: "image", fileId: "file-1" };
-    const automate = createAutomate(element);
-    const app = createApp(automate);
-    (app as unknown as { plugins: undefined }).plugins = undefined;
+    const view = createDrawing();
+    view.addImage("element-1", "file-1", vaultFile("diagram.png"));
     const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
-    const uploader = createUploader(app, upload);
+    const uploader = createUploader(createExcalidrawApp(undefined, view), upload);
 
     expect(uploader.canRun()).toBe(false);
     await expect(uploader.uploadCurrentDrawing()).resolves.toMatchObject({
