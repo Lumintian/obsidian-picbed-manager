@@ -10,6 +10,7 @@
     "build": "node esbuild.config.mjs production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "coverage": "vitest run --coverage",
     "lint": "eslint src tests",
     "check": "eslint src tests && tsc --noEmit && vitest run && node esbuild.config.mjs production"
   },
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
+    "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.2",
     "eslint": "^10.9.1",
     "globals": "^17.6.0",

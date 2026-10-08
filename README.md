@@ -88,6 +88,6 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` is the canonical final gate: lint, type-check, unit tests, and production build run once each. Use focused commands such as `pnpm test tests/path-selector.test.ts` while iterating.
+`pnpm check` is the canonical final gate: lint, type-check, unit tests, and production build run once each. Use focused commands such as `pnpm test tests/path-selector.test.ts` while iterating, and `pnpm coverage` for a coverage report (HTML output in `coverage/`).
 
 The build produces `main.js`. Install `main.js`, `manifest.json`, and `styles.css` in a vault plugin directory named `picbed-manager` for manual testing.
