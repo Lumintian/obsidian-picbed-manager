@@ -93,3 +93,5 @@ pnpm check
 The build produces `main.js`. Install `main.js`, `manifest.json`, and `styles.css` in a vault plugin directory named `picbed-manager` for manual testing.
 
 To test against a vault while developing, copy `.env.example` to `.env` and set `OBSIDIAN_PLUGIN_DIR` to `<vault>/.obsidian/plugins/picbed-manager`. `pnpm dev` (watch mode) and `pnpm build` then copy `main.js`, `manifest.json`, and `styles.css` there after every successful build and add a `.hotreload` marker, so the [Hot Reload](https://github.com/pjeby/hot-reload) plugin reloads Picbed Manager automatically. `pnpm check` never writes to the vault.
+
+To release, run `pnpm bump <major.minor.patch>`. It writes the new version to `package.json` and `manifest.json` and records its `minAppVersion` in `versions.json`. Commit the result and tag it with the bare version (for example `0.3.0`, without a `v` prefix) because Obsidian matches release tags against `manifest.json`.

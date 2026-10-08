@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
+    "bump": "node scripts/version-bump.mjs",
     "lint": "eslint src tests",
     "check": "eslint src tests && tsc --noEmit && vitest run && node esbuild.config.mjs production"
   },
