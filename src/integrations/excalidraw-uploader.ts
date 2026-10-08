@@ -6,6 +6,7 @@ import type { UploadCoordinatorCallbacks } from "../operations/upload-coordinato
 import { UploadCoordinator } from "../operations/upload-coordinator";
 import {
   ExcalidrawReferenceAdapter,
+  insertImage,
   isExcalidrawImageElement,
   queryDrawing,
   type ExcalidrawAutomateLike,
@@ -14,14 +15,10 @@ import {
   type ExcalidrawReferenceContext,
 } from "../references/excalidraw-adapter";
 import { createId } from "../shared/id";
-import { imageMimeTypeForExtension } from "../shared/image-types";
+import { imageMimeTypeForExtension, toImageDataURL } from "../shared/image-types";
 import type { UploadProfile } from "../settings/model";
 
 export const EXCALIDRAW_PLUGIN_ID = "obsidian-excalidraw-plugin";
-// Excalidraw inserts a pasted image asynchronously, which can take a few
-// seconds for large images, so the paste watcher polls for up to 10 seconds.
-const PASTE_WATCH_INTERVAL_MS = 100;
-const PASTE_WATCH_ATTEMPTS = 100;
 
 interface PluginManagerLike {
   plugins?: Record<string, unknown>;
@@ -80,16 +77,14 @@ export interface ExcalidrawUploaderOptions {
 /**
  * Integrates with Excalidraw from the outside, using its public
  * ExcalidrawAutomate API. The command uploads existing local images. The paste
- * hook lets Excalidraw insert a pasted image natively, then uploads the
- * clipboard image without waiting for Excalidraw to save it to the vault, so a
- * failed upload leaves an ordinary local image behind. Uploads run one at a
- * time in request order.
+ * hook takes over image pastes: it inserts the image at the pointer itself and
+ * then switches it to the hosted link, so a failed upload leaves an ordinary
+ * local image behind. Uploads run one at a time in request order.
  */
 export class ExcalidrawUploader {
   private readonly coordinator: UploadCoordinator<ExcalidrawReferenceContext>;
   private readonly notify: (message: string) => void;
   private readonly confirmUploadAll: (message: string) => boolean;
-  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private queue: Promise<void> = Promise.resolve();
   private hookHost: ExcalidrawAutomateLike | undefined;
   private previousPasteHook: ExcalidrawPasteHook | null | undefined;
@@ -144,25 +139,14 @@ export class ExcalidrawUploader {
         return previousResult ?? true;
       }
 
-      try {
-        const beforeElementIds = queryDrawing(
-          data.ea,
-          data.view,
-          (automate) =>
-            new Set(automate.getViewElements().map((element) => element.id)),
-        );
-        this.watchPastedImage(
-          { host: data.ea, view: data.view, notePath: getNotePath(data.view) },
-          beforeElementIds,
-          image,
-        );
-      } catch {
-        return previousResult ?? true;
-      }
-
-      // Let Excalidraw insert its normal local image first. The watcher
-      // replaces that image reference only after it exists in the scene.
-      return true;
+      // Take over the paste. Picbed inserts the image at the pointer itself,
+      // so there is no separate native copy to wait for or replace.
+      void this.pasteImage(
+        { host: data.ea, view: data.view, notePath: getNotePath(data.view) },
+        image,
+        data.pointerPosition,
+      );
+      return false;
     };
 
     try {
@@ -176,13 +160,8 @@ export class ExcalidrawUploader {
     return true;
   }
 
-  /**
-   * Stops watching for pasted images and restores a hook owned by another
-   * script/plugin when Picbed unloads.
-   */
+  /** Restores a hook owned by another script/plugin when Picbed unloads. */
   dispose(): void {
-    for (const timer of this.timers) clearTimeout(timer);
-    this.timers.clear();
     this.restorePasteHook();
   }
 
@@ -258,47 +237,43 @@ export class ExcalidrawUploader {
     return run;
   }
 
-  private schedule(callback: () => void, delayMs: number): void {
-    const timer = setTimeout(() => {
-      this.timers.delete(timer);
-      callback();
-    }, delayMs);
-    this.timers.add(timer);
-  }
-
-  private watchPastedImage(
+  /**
+   * Inserts a pasted image at the pointer right away, then queues its upload.
+   * The image stays visible and editable while it uploads.
+   */
+  private async pasteImage(
     target: DrawingTarget,
-    beforeElementIds: ReadonlySet<string>,
     image: File,
-  ): void {
-    // Start reading during the paste event, while the clipboard file is current.
-    const bytes = image.arrayBuffer();
-    bytes.catch(() => undefined);
-    const poll = (attempt: number): void => {
-      if (!this.isAutomaticPasteUploadEnabled()) return;
-      const element = findPastedImage(target, beforeElementIds);
-      if (element) {
-        void this.enqueue(() =>
-          this.uploadPastedImage(target, element, image, bytes),
-        );
-        return;
-      }
-      if (attempt >= PASTE_WATCH_ATTEMPTS) {
-        this.notify(
-          "Picbed Manager could not find the pasted image in Excalidraw, so it was not uploaded.",
-        );
-        return;
-      }
-      this.schedule(() => poll(attempt + 1), PASTE_WATCH_INTERVAL_MS);
-    };
-    this.schedule(() => poll(1), 0);
+    position: { x: number; y: number },
+  ): Promise<void> {
+    let bytes: ArrayBuffer;
+    let element: ExcalidrawImageElementLike;
+    try {
+      bytes = await image.arrayBuffer();
+      element = await insertImage(
+        target.host,
+        target.view,
+        toImageDataURL(bytes, image.type),
+        position,
+      );
+    } catch (error) {
+      this.notify(
+        `Could not paste the image into Excalidraw: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+      return;
+    }
+    await this.enqueue(() =>
+      this.uploadPastedImage(target, element, image, bytes),
+    );
   }
 
   private async uploadPastedImage(
     target: DrawingTarget,
     element: ExcalidrawImageElementLike,
     image: File,
-    bytes: Promise<ArrayBuffer>,
+    bytes: ArrayBuffer,
   ): Promise<void> {
     const profile = this.options.getProfile();
     if (!profile || !profile.endpoint.trim()) return;
@@ -309,7 +284,7 @@ export class ExcalidrawUploader {
         sourceId: createId("source"),
         fileName: image.name || `pasted-image-${Date.now()}.png`,
         mimeType: image.type,
-        bytes: await bytes,
+        bytes,
         origin: "excalidraw",
       };
       await this.uploadSource(target, profile, element, source, summary);
@@ -513,24 +488,6 @@ function getLocalCandidates(
     }
   }
   return [...candidates.values()];
-}
-
-/** Finds the image Excalidraw inserted for a paste, once it is in the scene. */
-function findPastedImage(
-  target: DrawingTarget,
-  beforeElementIds: ReadonlySet<string>,
-): ExcalidrawImageElementLike | undefined {
-  try {
-    return queryDrawing(target.host, target.view, (automate) =>
-      automate
-        .getViewElements()
-        .filter(isExcalidrawImageElement)
-        .find((element) => !beforeElementIds.has(element.id)),
-    );
-  } catch {
-    // The view may be in the middle of an update; the watcher polls again.
-    return undefined;
-  }
 }
 
 function getNotePath(view: unknown): string | undefined {

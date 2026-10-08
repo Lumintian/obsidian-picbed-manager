@@ -66,7 +66,7 @@ Use `true` to upload in that note even when **Upload pasted images** is off.
 
 With the Excalidraw plugin enabled:
 
-- **Paste:** a single pasted image is uploaded automatically. Excalidraw inserts it as usual, and once the upload finishes the image points to the hosted URL. If the upload fails, the image stays in the drawing as a normal local image. Images pasted while another upload is running wait their turn.
+- **Paste:** when you paste a single image, Picbed Manager places it under your mouse pointer right away and uploads it. You can move or resize it while it uploads. Once the upload finishes, the same image points to the hosted URL, and no copy is saved in your vault (unless Excalidraw happens to save the drawing while the image is still uploading). If the upload fails, the image stays in the drawing as a normal local image, and Excalidraw saves it to your vault as usual. Images pasted while another upload is running wait their turn.
 - **Command:** run **Picbed Manager: Upload images in current Excalidraw drawing** from the command palette to upload the selected images. If nothing is selected, you are asked whether to upload every image in the drawing. Images that already use a web link are left alone, and so are embedded notes, PDF pages, and other drawings. The original image files stay in your vault.
 
 ### Upload status
@@ -160,6 +160,7 @@ If your server does not return `publicUrl`, either use `src` with **Response URL
 - Paste in Canvas cards and in embedded or pop-up editors uses Obsidian's normal behavior and is not uploaded.
 - Failed uploads can be retried only until Obsidian restarts.
 - In Excalidraw, the `picbed-auto-upload` frontmatter setting is ignored.
+- The Excalidraw upload command only finds images that Excalidraw has already saved to your vault. After a failed paste upload, wait for the drawing to be saved (or switch away and back) before running the command.
 - A request that times out may still finish on the server, so a retry can leave a duplicate copy on your image host.
 - Removing a link does not delete the image from your image host.
 
@@ -173,7 +174,7 @@ If your server does not return `publicUrl`, either use `src` with **Response URL
 | Upload API returned HTTP 401 / 403. | Check the authentication header, token, or query parameter. |
 | Upload API returned invalid JSON. | The API must answer with JSON; APIs that return only plain text are not supported. |
 | Upload timed out after … seconds. | Increase **Timeout (seconds)**, or check that the endpoint is reachable from this device. |
-| Picbed Manager could not find the pasted image in Excalidraw… | Excalidraw did not insert the pasted image within 10 seconds. Run the upload command after Excalidraw has saved the drawing. |
+| Could not paste the image into Excalidraw: … | The pasted image could not be read or added to the drawing, so nothing was inserted. Check that the clipboard holds a valid image and paste again. |
 
 ## Development
 

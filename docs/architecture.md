@@ -89,9 +89,10 @@ These come from reading the Excalidraw plugin source (`src/shared/ExcalidrawAuto
 
 - The plugin object has an `ea` property, the shared instance also exposed as `window.ExcalidrawAutomate`. The plugin object itself has **no** `getAPI`.
 - `ea.getAPI(view)` creates a new EA instance targeting `view`, with its own empty workbench. `destroy()` releases it.
-- Views call hooks such as `onPasteHook` on their hook server, which is the shared `ea` unless a script registered another instance.
+- Views call hooks such as `onPasteHook` on their hook server, which is the shared `ea` unless a script registered another instance. The hook receives the clipboard event and `pointerPosition`, the pointer in scene coordinates. Returning `false` stops Excalidraw's own paste handling.
+- `addImage(x, y, imageFile)` also accepts a `data:` URL. It stages an image with a new random file ID and no vault file, and computes its size from the data.
 - `copyViewElementsToEAforEditing(elements, true)` stages copies of the elements and their image data in the instance's workbench. `getElement(id)` reads that workbench, not the scene.
-- `addElementsToView()` writes **every** staged element back to the scene, replacing elements with the same ID and inserting the rest. It does not clear the workbench.
+- `addElementsToView(repositionToCursor, save, newElementsOnTop)` writes **every** staged element back to the scene, replacing elements with the same ID and inserting the rest. It does not clear the workbench. With `save` false it only marks the drawing as changed, so it is saved by the next autosave.
 - `getViewElements()` returns the scene's non-deleted elements.
 - A pasted image is written to the vault only when the drawing is saved. Autosave defaults to every 60 seconds on desktop and 30 seconds on mobile, so `getViewFileForImageElement()` returns nothing for a fresh paste.
 
@@ -104,9 +105,9 @@ These come from reading the Excalidraw plugin source (`src/shared/ExcalidrawAuto
 ### Paste flow
 
 1. Picbed wraps any existing `onPasteHook` and re-registers on `layout-change` and `active-leaf-change`, because Excalidraw may load after Picbed. It restores the previous hook on unload.
-2. On a paste with exactly one supported image, the hook records the IDs of the elements already in the scene, starts reading the clipboard file, and returns `true` so Excalidraw handles the paste natively.
-3. A watcher polls every 100 ms, for up to 10 seconds, for a new image element. It does not wait for a vault file.
-4. The upload is queued with the clipboard bytes. If the image never appears, the user is notified. Pending watchers are cancelled on unload.
+2. On a paste with exactly one supported image, the hook returns `false`, so Excalidraw does not paste anything itself. Every other paste is left to Excalidraw.
+3. Picbed reads the clipboard file and inserts it with `insertImage()`: `addImage()` with a `data:` URL on a private instance, centered on `pointerPosition`, then `addElementsToView(false, false, true)`. Not saving here is deliberate; a save would make Excalidraw write the image to the vault before the upload finishes.
+4. The upload of the same bytes is queued. On success, the usual commit switches the element to the hosted link, so Excalidraw never writes a local copy unless it happened to save the drawing during the upload. On failure the element stays an ordinary pasted image, which the next autosave writes to the vault.
 
 ### Command flow
 

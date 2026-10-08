@@ -5,14 +5,20 @@ import type {
   ExcalidrawElementLike,
   ExcalidrawImageInfoLike,
   ExcalidrawPasteHook,
+  ExcalidrawWorkbenchElementLike,
 } from "../../src/references/excalidraw-adapter";
 
-export interface FakeImageElement extends ExcalidrawElementLike {
+export interface FakeImageElement extends ExcalidrawWorkbenchElementLike {
   type: "image";
   fileId: string;
-  x: number;
   isDeleted?: boolean;
 }
+
+/** The size the fake gives every image added with `addImage`. */
+export const FAKE_IMAGE_SIZE = { width: 200, height: 100 };
+
+// Shared by all instances: like Excalidraw's nanoid IDs, IDs never repeat.
+let addedImages = 0;
 
 /** The scene's binary data for a file id plus Excalidraw's link for it. */
 export interface FakeDrawingFile {
@@ -33,6 +39,8 @@ export class FakeExcalidrawView {
   selectedIds = new Set<string>();
   loaded = true;
   saveSucceeds = true;
+  /** Whether each `addElementsToView` call asked Excalidraw to save. */
+  readonly saveRequests: boolean[] = [];
 
   constructor(readonly file: TFile) {}
 
@@ -41,7 +49,14 @@ export class FakeExcalidrawView {
   }
 
   addImage(id: string, fileId: string, file: TFile | null): FakeImageElement {
-    const element: FakeImageElement = { id, type: "image", fileId, x: 0 };
+    const element: FakeImageElement = {
+      id,
+      type: "image",
+      fileId,
+      x: 0,
+      y: 0,
+      ...FAKE_IMAGE_SIZE,
+    };
     this.elements = [...this.elements, element];
     this.files[fileId] ??= {
       mimeType: "image/png",
@@ -127,20 +142,63 @@ export class FakeExcalidrawAutomate implements ExcalidrawAutomateLike {
     }
   }
 
-  async addElementsToView(): Promise<boolean> {
+  /** Like the real method, accepts a data URL and stages a new image for it. */
+  async addImage(
+    topX: number,
+    topY: number,
+    imageFile: string,
+  ): Promise<string | null> {
+    if (!imageFile.startsWith("data:image/")) return null;
+    addedImages += 1;
+    const id = `${this.targetView?.file.name ?? "drawing"}-pasted-${addedImages}`;
+    const fileId = `file-${id}`;
+    this.imagesDict[fileId] = {
+      id: fileId,
+      mimeType: imageFile.slice("data:".length, imageFile.indexOf(";")),
+      dataURL: imageFile,
+      file: null,
+      isHyperLink: false,
+      hyperlink: undefined,
+    };
+    this.elementsDict[id] = {
+      id,
+      type: "image",
+      fileId,
+      x: topX,
+      y: topY,
+      ...FAKE_IMAGE_SIZE,
+    };
+    return id;
+  }
+
+  getElement(id: string): FakeImageElement | undefined {
+    return this.elementsDict[id];
+  }
+
+  async addElementsToView(
+    ...[, save = true, newElementsOnTop = false]: [
+      repositionToCursor?: boolean,
+      save?: boolean,
+      newElementsOnTop?: boolean,
+    ]
+  ): Promise<boolean> {
     const view = this.readyView();
     if (!view?.saveSucceeds) return false;
+    view.saveRequests.push(save);
     const staged = Object.values(this.elementsDict);
     const sceneIds = new Set(view.elements.map((element) => element.id));
-    view.elements = [
-      ...staged.filter((element) => !sceneIds.has(element.id)),
-      ...view.elements.map((element) => this.elementsDict[element.id] ?? element),
-    ].map((element) => ({ ...element }));
+    const inserted = staged.filter((element) => !sceneIds.has(element.id));
+    const updated = view.elements.map(
+      (element) => this.elementsDict[element.id] ?? element,
+    );
+    view.elements = (
+      newElementsOnTop ? [...updated, ...inserted] : [...inserted, ...updated]
+    ).map((element) => ({ ...element }));
     for (const [fileId, info] of Object.entries(this.imagesDict)) {
       view.files[fileId] = {
         mimeType: String(info.mimeType),
         dataURL: String(info.dataURL),
-        file: info.isHyperLink ? null : (info.file as TFile | null),
+        file: info.isHyperLink ? null : ((info.file as TFile | null) ?? null),
         isHyperLink: info.isHyperLink === true,
         hyperlink: info.isHyperLink ? String(info.hyperlink) : undefined,
       };

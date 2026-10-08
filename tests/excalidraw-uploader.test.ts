@@ -27,6 +27,7 @@ function createUploader(
   overrides: Partial<{
     notify: (message: string) => void;
     confirmUploadAll: (message: string) => boolean;
+    autoUploadOnPaste: () => boolean;
   }> = {},
 ): ExcalidrawUploader {
   return new ExcalidrawUploader(
@@ -35,6 +36,7 @@ function createUploader(
     {
       getProfile: configuredProfile,
       getRetryCount: () => 0,
+      autoUploadOnPaste: overrides.autoUploadOnPaste,
       callbacks: {
         onJobChanged: vi.fn(),
         onAssetCreated: vi.fn(),
@@ -57,19 +59,27 @@ function uploadedTo(url: string): AssetResult {
 const uploadedResult = uploadedTo("https://img.test/diagram.png");
 
 const clipboardBytes = new Uint8Array([7, 8, 9]).buffer;
+const clipboardDataURL = "data:image/png;base64,BwgJ";
 
-/** Runs the paste hook the way Excalidraw does when an image is pasted. */
-function runPasteHook(
-  host: FakeExcalidrawAutomate,
-  view: FakeExcalidrawView,
-): boolean | void {
-  const clipboardFile = {
+function clipboardImage(): File {
+  return {
     name: "pasted.png",
     type: "image/png",
     arrayBuffer: async () => clipboardBytes,
   } as File;
+}
+
+/** Calls the paste hook the way Excalidraw does for a paste at `pointer`. */
+function paste(
+  host: FakeExcalidrawAutomate,
+  view: FakeExcalidrawView,
+  {
+    pointer = { x: 0, y: 0 },
+    files = [clipboardImage()],
+  }: { pointer?: { x: number; y: number }; files?: File[] } = {},
+): boolean | void {
   const clipboardData = {
-    files: { length: 1, item: () => clipboardFile },
+    files: { length: files.length, item: (index: number) => files[index] ?? null },
   } as unknown as DataTransfer;
   return host.onPasteHook?.({
     ea: host,
@@ -77,24 +87,18 @@ function runPasteHook(
     event: { clipboardData } as ClipboardEvent,
     excalidrawFile: view.file,
     view,
-    pointerPosition: { x: 0, y: 0 },
+    pointerPosition: pointer,
   });
 }
 
-/**
- * Pastes an image: the hook runs first, then Excalidraw inserts the image.
- * Excalidraw writes pasted images to the vault only on its next save, so the
- * new element has no vault file yet.
- */
-function pasteImage(
-  host: FakeExcalidrawAutomate,
-  view: FakeExcalidrawView,
-  elementId: string,
-  fileId: string,
-): boolean | void {
-  const result = runPasteHook(host, view);
-  view.addImage(elementId, fileId, null);
-  return result;
+/** The images Picbed inserted into `view` for pastes. */
+function pastedImages(view: FakeExcalidrawView) {
+  return view.elements.filter((element) => element.id.includes("-pasted-"));
+}
+
+/** Lets pending paste and upload work run. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** Resolves each upload only when the test releases it. */
@@ -118,7 +122,7 @@ function createControlledUpload() {
     maxActive: () => maxActive,
     releaseNext: async () => {
       pending.shift()?.();
-      await vi.runAllTimersAsync();
+      await settle();
     },
   };
 }
@@ -325,10 +329,8 @@ describe("ExcalidrawUploader", () => {
     expect(host.onPasteHook).toBe(previous);
   });
 
-  it("uploads a pasted image before Excalidraw saves it to the vault", async () => {
-    vi.useFakeTimers();
+  it("takes over an image paste and inserts the image at the pointer", async () => {
     const view = createDrawing();
-    view.addImage("element-1", "file-1", vaultFile("existing.png"));
     const host = new FakeExcalidrawAutomate();
     const upload = vi.fn<ProviderAdapter["upload"]>(async (source) => {
       expect(source).toMatchObject({
@@ -340,50 +342,98 @@ describe("ExcalidrawUploader", () => {
       return uploadedResult;
     });
     const uploader = createUploader(createExcalidrawApp(host, view), upload);
+    uploader.registerPasteHook();
 
-    expect(uploader.registerPasteHook()).toBe(true);
-    expect(pasteImage(host, view, "element-2", "file-2")).toBe(true);
-    await vi.runAllTimersAsync();
+    expect(paste(host, view, { pointer: { x: 400, y: 300 } })).toBe(false);
+    await settle();
 
-    expect(upload).toHaveBeenCalledOnce();
-    expect(view.files["file-2"]).toMatchObject({
+    const [image] = pastedImages(view);
+    expect(image).toMatchObject({ x: 300, y: 250, width: 200, height: 100 });
+    expect(view.files[image?.fileId ?? ""]).toMatchObject({
+      dataURL: clipboardDataURL,
       file: null,
       isHyperLink: true,
       hyperlink: uploadedResult.url,
     });
-    expect(view.files["file-1"]?.isHyperLink).toBeUndefined();
+    expect(upload).toHaveBeenCalledOnce();
+    // Inserting must not save, or Excalidraw would write a local copy first.
+    expect(view.saveRequests[0]).toBe(false);
   });
 
-  it("uploads every image pasted while another upload is running", async () => {
-    vi.useFakeTimers();
+  it("shows the pasted image at once and keeps edits made while it uploads", async () => {
     const view = createDrawing();
     const host = new FakeExcalidrawAutomate();
     const controlled = createControlledUpload();
-    const notify = vi.fn();
     const uploader = createUploader(
       createExcalidrawApp(host, view),
       controlled.upload,
+    );
+    uploader.registerPasteHook();
+
+    paste(host, view);
+    await settle();
+    const [image] = pastedImages(view);
+    expect(image).toBeDefined();
+    expect(view.files[image?.fileId ?? ""]?.isHyperLink).toBe(false);
+    view.edit(image?.id ?? "", { x: 900 });
+    await controlled.releaseNext();
+
+    expect(view.element(image?.id ?? "")?.x).toBe(900);
+    expect(view.files[image?.fileId ?? ""]?.hyperlink).toBe(uploadedResult.url);
+  });
+
+  it("keeps the pasted image as a local image when the upload fails", async () => {
+    const view = createDrawing();
+    const host = new FakeExcalidrawAutomate();
+    const notify = vi.fn();
+    const uploader = createUploader(
+      createExcalidrawApp(host, view),
+      vi.fn(async () => {
+        throw new UploadError("network", "offline");
+      }),
       { notify },
     );
     uploader.registerPasteHook();
 
-    pasteImage(host, view, "element-1", "file-1");
-    await vi.advanceTimersByTimeAsync(100);
-    pasteImage(host, view, "element-2", "file-2");
-    // Well past the time the old watcher gave up while another upload ran.
-    await vi.advanceTimersByTimeAsync(30_000);
+    paste(host, view);
+    await settle();
+
+    const [image] = pastedImages(view);
+    expect(view.files[image?.fileId ?? ""]).toMatchObject({
+      dataURL: clipboardDataURL,
+      file: null,
+      isHyperLink: false,
+    });
+    expect(notify).toHaveBeenCalledWith(
+      "Excalidraw image upload failed for pasted.png: offline",
+    );
+  });
+
+  it("uploads every image pasted while another upload is running", async () => {
+    const view = createDrawing();
+    const host = new FakeExcalidrawAutomate();
+    const controlled = createControlledUpload();
+    const uploader = createUploader(
+      createExcalidrawApp(host, view),
+      controlled.upload,
+    );
+    uploader.registerPasteHook();
+
+    paste(host, view, { pointer: { x: 0, y: 0 } });
+    paste(host, view, { pointer: { x: 500, y: 0 } });
+    await settle();
+    expect(pastedImages(view)).toHaveLength(2);
     await controlled.releaseNext();
     await controlled.releaseNext();
 
     expect(controlled.upload).toHaveBeenCalledTimes(2);
     expect(controlled.maxActive()).toBe(1);
-    expect(view.files["file-1"]?.hyperlink).toBe(uploadedResult.url);
-    expect(view.files["file-2"]?.hyperlink).toBe(uploadedResult.url);
-    expect(notify).toHaveBeenCalledTimes(2);
+    for (const image of pastedImages(view)) {
+      expect(view.files[image.fileId]?.hyperlink).toBe(uploadedResult.url);
+    }
   });
 
   it("queues the upload command behind a running paste upload", async () => {
-    vi.useFakeTimers();
     const view = createDrawing();
     view.addImage("existing", "file-0", vaultFile("existing.png"));
     view.selectedIds.add("existing");
@@ -395,10 +445,10 @@ describe("ExcalidrawUploader", () => {
     );
     uploader.registerPasteHook();
 
-    pasteImage(host, view, "pasted", "file-1");
-    await vi.advanceTimersByTimeAsync(100);
+    paste(host, view);
+    await settle();
     const command = uploader.uploadCurrentDrawing();
-    await vi.advanceTimersByTimeAsync(100);
+    await settle();
     expect(controlled.upload).toHaveBeenCalledOnce();
     await controlled.releaseNext();
     await controlled.releaseNext();
@@ -406,65 +456,51 @@ describe("ExcalidrawUploader", () => {
     await expect(command).resolves.toMatchObject({ total: 1, uploaded: 1 });
     expect(controlled.maxActive()).toBe(1);
     expect(view.files["file-0"]?.isHyperLink).toBe(true);
-    expect(view.files["file-1"]?.isHyperLink).toBe(true);
   });
 
-  it("waits for Excalidraw to insert a slow pasted image", async () => {
-    vi.useFakeTimers();
+  it("leaves other pastes to Excalidraw", async () => {
     const view = createDrawing();
     const host = new FakeExcalidrawAutomate();
     const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
-    const uploader = createUploader(createExcalidrawApp(host, view), upload);
+    let autoUpload = true;
+    const uploader = createUploader(createExcalidrawApp(host, view), upload, {
+      autoUploadOnPaste: () => autoUpload,
+    });
     uploader.registerPasteHook();
 
-    runPasteHook(host, view);
-    await vi.advanceTimersByTimeAsync(3_000);
-    view.addImage("element-1", "file-1", null);
-    await vi.runAllTimersAsync();
+    expect(paste(host, view, { files: [clipboardImage(), clipboardImage()] })).toBe(true);
+    expect(
+      paste(host, view, { files: [{ name: "a.txt", type: "text/plain" } as File] }),
+    ).toBe(true);
+    autoUpload = false;
+    expect(paste(host, view)).toBe(true);
+    await settle();
 
-    expect(upload).toHaveBeenCalledOnce();
-    expect(view.files["file-1"]?.hyperlink).toBe(uploadedResult.url);
+    expect(pastedImages(view)).toEqual([]);
+    expect(upload).not.toHaveBeenCalled();
   });
 
-  it("reports a pasted image that never appears in the drawing", async () => {
-    vi.useFakeTimers();
+  it("reports a paste that could not be inserted", async () => {
     const view = createDrawing();
+    view.saveSucceeds = false;
     const host = new FakeExcalidrawAutomate();
-    const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
     const notify = vi.fn();
+    const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
     const uploader = createUploader(createExcalidrawApp(host, view), upload, {
       notify,
     });
     uploader.registerPasteHook();
 
-    runPasteHook(host, view);
-    await vi.runAllTimersAsync();
+    paste(host, view);
+    await settle();
 
-    expect(upload).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledWith(
-      "Picbed Manager could not find the pasted image in Excalidraw, so it was not uploaded.",
+      "Could not paste the image into Excalidraw: Excalidraw could not add the pasted image.",
     );
-  });
-
-  it("stops watching for pasted images when disposed", async () => {
-    vi.useFakeTimers();
-    const view = createDrawing();
-    const host = new FakeExcalidrawAutomate();
-    const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
-    const uploader = createUploader(createExcalidrawApp(host, view), upload);
-    uploader.registerPasteHook();
-
-    runPasteHook(host, view);
-    uploader.dispose();
-    expect(vi.getTimerCount()).toBe(0);
-    view.addImage("element-1", "file-1", null);
-    await vi.runAllTimersAsync();
-
     expect(upload).not.toHaveBeenCalled();
   });
 
   it("does not copy images from one drawing into another", async () => {
-    vi.useFakeTimers();
     const first = createDrawing("First.excalidraw.md");
     const second = createDrawing("Second.excalidraw.md");
     const host = new FakeExcalidrawAutomate();
@@ -474,14 +510,16 @@ describe("ExcalidrawUploader", () => {
     );
     uploader.registerPasteHook();
 
-    pasteImage(host, first, "first-image", "file-1");
-    await vi.runAllTimersAsync();
-    first.edit("first-image", { x: 300 });
-    pasteImage(host, second, "second-image", "file-2");
-    await vi.runAllTimersAsync();
+    paste(host, first);
+    await settle();
+    const [firstImage] = pastedImages(first);
+    first.edit(firstImage?.id ?? "", { x: 300 });
+    paste(host, second);
+    await settle();
 
-    expect(second.elements.map((element) => element.id)).toEqual(["second-image"]);
-    expect(first.element("first-image")?.x).toBe(300);
+    expect(second.elements).toHaveLength(1);
+    expect(first.elements).toHaveLength(1);
+    expect(first.element(firstImage?.id ?? "")?.x).toBe(300);
   });
 
   it("does not run when the Excalidraw plugin is unavailable", async () => {

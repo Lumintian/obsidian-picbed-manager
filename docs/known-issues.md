@@ -5,6 +5,8 @@ Open problems found in code review, with a suggested direction for each. User-vi
 ## Bugs
 
 - **Excalidraw paste ignores the `picbed-auto-upload` frontmatter**, unlike Markdown notes.
+- **The Excalidraw command skips images that are not saved yet.** It reads vault files, but a pasted image whose upload failed has no file until Excalidraw's next save. *Direction:* fall back to the scene's image data (`copyViewElementsToEAforEditing(..., true)` exposes its `dataURL`) when there is no vault file.
+- **A save during a paste upload leaves a local copy behind.** If Excalidraw saves the drawing while a pasted image is uploading, it writes the image to the vault, and that file stays after the switch to the hosted link.
 - **Clearing the timeout field saves 0 seconds**, so every upload fails validation until the field is fixed. After a reload the value is clamped to 1 second. *Direction:* validate the input and keep the last valid value.
 
 ## Robustness and performance

@@ -11,6 +11,14 @@ export interface ExcalidrawElementLike {
   isDeleted?: boolean;
 }
 
+/** A mutable element staged on an ExcalidrawAutomate workbench. */
+export interface ExcalidrawWorkbenchElementLike extends ExcalidrawElementLike {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** The public image workbench shape exposed by ExcalidrawAutomate. */
 export interface ExcalidrawImageInfoLike {
   id?: string;
@@ -47,10 +55,15 @@ export interface ExcalidrawAutomateLike {
     elements: readonly ExcalidrawElementLike[],
     copyImages?: boolean,
   ): void;
+  /** Stages an image; `imageFile` may be a data URL. Resolves to its element ID. */
+  addImage(topX: number, topY: number, imageFile: string): Promise<string | null>;
+  /** Returns a staged element from this instance's workbench, not the scene. */
+  getElement(id: string): ExcalidrawWorkbenchElementLike | undefined;
   imagesDict: Record<string, ExcalidrawImageInfoLike>;
   addElementsToView(
     repositionToCursor?: boolean,
     save?: boolean,
+    newElementsOnTop?: boolean,
   ): Promise<boolean>;
   clear(): void;
   destroy?(): void;
@@ -76,6 +89,36 @@ export function queryDrawing<T>(
   const automate = host.getAPI(view);
   try {
     return query(automate);
+  } finally {
+    releaseAutomate(automate);
+  }
+}
+
+/**
+ * Adds an image from a data URL to the drawing, centered on `position`, and
+ * returns the new element. The drawing is only
+ * marked as changed, not saved, so Excalidraw does not write the image to the
+ * vault before Picbed has had a chance to switch it to a hosted link.
+ */
+export async function insertImage(
+  host: ExcalidrawAutomateLike,
+  view: unknown,
+  dataURL: string,
+  position: { x: number; y: number },
+): Promise<ExcalidrawElementLike & { fileId: string }> {
+  const automate = host.getAPI(view);
+  try {
+    const id = await automate.addImage(0, 0, dataURL);
+    const element = id ? automate.getElement(id) : undefined;
+    if (!id || !element || !isExcalidrawImageElement(element)) {
+      throw new Error("Excalidraw could not read the pasted image.");
+    }
+    element.x = position.x - element.width / 2;
+    element.y = position.y - element.height / 2;
+    if (!(await automate.addElementsToView(false, false, true))) {
+      throw new Error("Excalidraw could not add the pasted image.");
+    }
+    return { id, type: "image", fileId: element.fileId };
   } finally {
     releaseAutomate(automate);
   }
