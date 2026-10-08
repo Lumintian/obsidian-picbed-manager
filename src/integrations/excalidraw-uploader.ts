@@ -17,8 +17,10 @@ import { createId } from "../shared/id";
 import type { UploadProfile } from "../settings/model";
 
 export const EXCALIDRAW_PLUGIN_ID = "obsidian-excalidraw-plugin";
-const PASTE_POLL_ATTEMPTS = 20;
-const PASTE_POLL_DELAY_MS = 50;
+// Excalidraw inserts a pasted image asynchronously, which can take a few
+// seconds for large images, so the paste watcher polls for up to 10 seconds.
+const PASTE_WATCH_INTERVAL_MS = 100;
+const PASTE_WATCH_ATTEMPTS = 100;
 
 interface PluginManagerLike {
   plugins?: Record<string, unknown>;
@@ -38,8 +40,10 @@ interface ActiveExcalidrawViewLike {
   file?: TFile | null;
 }
 
+type ExcalidrawImageElementLike = ExcalidrawElementLike & { fileId: string };
+
 interface UploadCandidate {
-  element: ExcalidrawElementLike & { fileId: string };
+  element: ExcalidrawImageElementLike;
   file: TFile;
 }
 
@@ -73,15 +77,18 @@ export interface ExcalidrawUploaderOptions {
 
 /**
  * Integrates with Excalidraw from the outside, using its public
- * ExcalidrawAutomate API. The command handles existing images, while the
- * paste hook lets Excalidraw finish its native paste before uploading the new
- * local image. That preserves the local image as a fallback on failure.
+ * ExcalidrawAutomate API. The command uploads existing local images. The paste
+ * hook lets Excalidraw insert a pasted image natively, then uploads the
+ * clipboard image without waiting for Excalidraw to save it to the vault, so a
+ * failed upload leaves an ordinary local image behind. Uploads run one at a
+ * time in request order.
  */
 export class ExcalidrawUploader {
   private readonly coordinator: UploadCoordinator<ExcalidrawReferenceContext>;
   private readonly notify: (message: string) => void;
   private readonly confirmUploadAll: (message: string) => boolean;
-  private running = false;
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private queue: Promise<void> = Promise.resolve();
   private hookHost: ExcalidrawAutomateLike | undefined;
   private previousPasteHook: ExcalidrawPasteHook | null | undefined;
   private pasteHook: ExcalidrawPasteHook | undefined;
@@ -102,11 +109,7 @@ export class ExcalidrawUploader {
   }
 
   canRun(): boolean {
-    return (
-      !this.running &&
-      !!getActiveExcalidrawView(this.app) &&
-      !!getExcalidrawHost(this.app)
-    );
+    return !!getActiveExcalidrawView(this.app) && !!getExcalidrawHost(this.app);
   }
 
   /** Registers the optional Excalidraw paste hook once the dependency is ready. */
@@ -134,7 +137,8 @@ export class ExcalidrawUploader {
       if (!this.options.getProfile()?.endpoint.trim()) {
         return previousResult ?? true;
       }
-      if (!getSingleSupportedImage(data.event?.clipboardData ?? null)) {
+      const image = getSingleSupportedImage(data.event?.clipboardData ?? null);
+      if (!image) {
         return previousResult ?? true;
       }
 
@@ -145,16 +149,17 @@ export class ExcalidrawUploader {
           (automate) =>
             new Set(automate.getViewElements().map((element) => element.id)),
         );
-        this.schedulePastedImageUpload(
+        this.watchPastedImage(
           { host: data.ea, view: data.view, notePath: getNotePath(data.view) },
           beforeElementIds,
+          image,
         );
       } catch {
         return previousResult ?? true;
       }
 
-      // Let Excalidraw create its normal local image first. The scheduled
-      // upload replaces that image reference only after it exists in the scene.
+      // Let Excalidraw insert its normal local image first. The watcher
+      // replaces that image reference only after it exists in the scene.
       return true;
     };
 
@@ -169,16 +174,18 @@ export class ExcalidrawUploader {
     return true;
   }
 
-  /** Restores a hook owned by another script/plugin when Picbed unloads. */
+  /**
+   * Stops watching for pasted images and restores a hook owned by another
+   * script/plugin when Picbed unloads.
+   */
   dispose(): void {
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
     this.restorePasteHook();
   }
 
   async uploadCurrentDrawing(): Promise<ExcalidrawUploadSummary> {
     const summary = createEmptySummary();
-    if (this.running) return summary;
-    this.running = true;
-
     try {
       const profile = this.options.getProfile();
       if (!profile || !profile.endpoint.trim()) {
@@ -216,19 +223,9 @@ export class ExcalidrawUploader {
         return summary;
       }
 
-      const candidates = queryDrawing(host, view, (automate) =>
-        getLocalCandidates(automate, chosen),
+      await this.enqueue(() =>
+        this.uploadLocalImages(target, profile, chosen, summary),
       );
-      summary.skipped += chosen.length - candidates.length;
-      if (candidates.length === 0) {
-        this.notify(
-          "No local Excalidraw images are available to upload. Existing external image links were left unchanged.",
-        );
-        return summary;
-      }
-
-      await this.uploadCandidates(target, profile, candidates, summary);
-      this.reportSummary(summary);
       return summary;
     } catch (error) {
       this.notify(
@@ -237,8 +234,6 @@ export class ExcalidrawUploader {
         }`,
       );
       return summary;
-    } finally {
-      this.running = false;
     }
   }
 
@@ -254,74 +249,68 @@ export class ExcalidrawUploader {
     return this.coordinator.retry(jobId, retryCount);
   }
 
-  private schedulePastedImageUpload(
-    target: DrawingTarget,
-    beforeElementIds: ReadonlySet<string>,
-    attempt = 0,
-  ): void {
-    const poll = (): void => {
-      if (!this.isAutomaticPasteUploadEnabled()) return;
-      try {
-        const candidates = queryDrawing(target.host, target.view, (automate) =>
-          getLocalCandidates(
-            automate,
-            automate
-              .getViewElements()
-              .filter((element) => !beforeElementIds.has(element.id))
-              .filter(isExcalidrawImageElement),
-          ),
-        );
-        if (candidates.length > 0) {
-          if (this.running) {
-            if (attempt < PASTE_POLL_ATTEMPTS) {
-              setTimeout(
-                () =>
-                  this.schedulePastedImageUpload(
-                    target,
-                    beforeElementIds,
-                    attempt + 1,
-                  ),
-                PASTE_POLL_DELAY_MS,
-              );
-            }
-            return;
-          }
-          const profile = this.options.getProfile();
-          if (!profile || !profile.endpoint.trim()) return;
-          void this.uploadPastedCandidates(target, profile, candidates);
-          return;
-        }
-      } catch {
-        // The view may still be creating the pasted file; poll again below.
-      }
-
-      if (attempt < PASTE_POLL_ATTEMPTS) {
-        setTimeout(
-          () =>
-            this.schedulePastedImageUpload(
-              target,
-              beforeElementIds,
-              attempt + 1,
-            ),
-          PASTE_POLL_DELAY_MS,
-        );
-      }
-    };
-
-    setTimeout(poll, attempt === 0 ? 0 : PASTE_POLL_DELAY_MS);
+  /** Runs uploads one at a time so overlapping requests queue instead of dropping. */
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const run = this.queue.then(task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
-  private async uploadPastedCandidates(
+  private schedule(callback: () => void, delayMs: number): void {
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      callback();
+    }, delayMs);
+    this.timers.add(timer);
+  }
+
+  private watchPastedImage(
     target: DrawingTarget,
-    profile: UploadProfile,
-    candidates: readonly UploadCandidate[],
+    beforeElementIds: ReadonlySet<string>,
+    image: File,
+  ): void {
+    // Start reading during the paste event, while the clipboard file is current.
+    const bytes = image.arrayBuffer();
+    bytes.catch(() => undefined);
+    const poll = (attempt: number): void => {
+      if (!this.isAutomaticPasteUploadEnabled()) return;
+      const element = findPastedImage(target, beforeElementIds);
+      if (element) {
+        void this.enqueue(() =>
+          this.uploadPastedImage(target, element, image, bytes),
+        );
+        return;
+      }
+      if (attempt >= PASTE_WATCH_ATTEMPTS) {
+        this.notify(
+          "Picbed Manager could not find the pasted image in Excalidraw, so it was not uploaded.",
+        );
+        return;
+      }
+      this.schedule(() => poll(attempt + 1), PASTE_WATCH_INTERVAL_MS);
+    };
+    this.schedule(() => poll(1), 0);
+  }
+
+  private async uploadPastedImage(
+    target: DrawingTarget,
+    element: ExcalidrawImageElementLike,
+    image: File,
+    bytes: Promise<ArrayBuffer>,
   ): Promise<void> {
-    if (this.running) return;
-    this.running = true;
+    const profile = this.options.getProfile();
+    if (!profile || !profile.endpoint.trim()) return;
     const summary = createEmptySummary();
-    summary.total = candidates.length;
+    summary.total = 1;
     try {
-      await this.uploadCandidates(target, profile, candidates, summary);
+      const source: AssetSource = {
+        sourceId: createId("source"),
+        fileName: image.name || `pasted-image-${Date.now()}.png`,
+        mimeType: image.type,
+        bytes: await bytes,
+        origin: "excalidraw",
+      };
+      await this.uploadSource(target, profile, element, source, summary);
       this.reportSummary(summary);
     } catch (error) {
       this.notify(
@@ -329,17 +318,28 @@ export class ExcalidrawUploader {
           error instanceof Error ? error.message : "Unknown error"
         }`,
       );
-    } finally {
-      this.running = false;
     }
   }
 
-  private async uploadCandidates(
+  private async uploadLocalImages(
     target: DrawingTarget,
     profile: UploadProfile,
-    candidates: readonly UploadCandidate[],
+    elements: readonly ExcalidrawImageElementLike[],
     summary: ExcalidrawUploadSummary,
   ): Promise<void> {
+    // Resolve files when this upload starts: images committed by earlier
+    // queued uploads are hyperlinks by now and are skipped.
+    const candidates = queryDrawing(target.host, target.view, (automate) =>
+      getLocalCandidates(automate, elements),
+    );
+    summary.skipped += elements.length - candidates.length;
+    if (candidates.length === 0) {
+      this.notify(
+        "No local Excalidraw images are available to upload. Existing external image links were left unchanged.",
+      );
+      return;
+    }
+
     const prepared = await this.readCandidates(candidates, summary);
     if (prepared.length === 0) {
       this.notify("No readable local Excalidraw images were found.");
@@ -347,8 +347,22 @@ export class ExcalidrawUploader {
     }
 
     for (const candidate of prepared) {
-      await this.uploadCandidate(target, profile, candidate, summary);
+      const source: AssetSource = {
+        sourceId: createId("source"),
+        fileName: candidate.file.name,
+        mimeType: mimeTypeForExtension(candidate.file.extension),
+        bytes: candidate.bytes,
+        origin: "excalidraw",
+      };
+      await this.uploadSource(
+        target,
+        profile,
+        candidate.element,
+        source,
+        summary,
+      );
     }
+    this.reportSummary(summary);
   }
 
   private async readCandidates(
@@ -374,24 +388,18 @@ export class ExcalidrawUploader {
     return prepared;
   }
 
-  private async uploadCandidate(
+  private async uploadSource(
     target: DrawingTarget,
     profile: UploadProfile,
-    candidate: PreparedCandidate,
+    element: ExcalidrawImageElementLike,
+    source: AssetSource,
     summary: ExcalidrawUploadSummary,
   ): Promise<void> {
-    const source: AssetSource = {
-      sourceId: createId("source"),
-      fileName: candidate.file.name,
-      mimeType: mimeTypeForExtension(candidate.file.extension),
-      bytes: candidate.bytes,
-      origin: "excalidraw",
-    };
     const context: ExcalidrawReferenceContext = {
       host: target.host,
       view: target.view,
-      elementId: candidate.element.id,
-      fileId: candidate.element.fileId,
+      elementId: element.id,
+      fileId: element.fileId,
     };
     const job = this.coordinator.create(
       source,
@@ -407,11 +415,11 @@ export class ExcalidrawUploader {
       summary.uploaded += 1;
     } else if (completed.status === "cancelled") {
       summary.cancelled += 1;
-      this.notify(`Upload cancelled: ${candidate.file.name}`);
+      this.notify(`Upload cancelled: ${source.fileName}`);
     } else {
       summary.failed += 1;
       this.notify(
-        `Excalidraw image upload failed for ${candidate.file.name}: ${
+        `Excalidraw image upload failed for ${source.fileName}: ${
           completed.error?.message ?? "Unknown error"
         }`,
       );
@@ -471,10 +479,10 @@ export function getExcalidrawHost(
 }
 
 function chooseImages(
-  selected: readonly (ExcalidrawElementLike & { fileId: string })[],
-  allImages: readonly (ExcalidrawElementLike & { fileId: string })[],
+  selected: readonly ExcalidrawImageElementLike[],
+  allImages: readonly ExcalidrawImageElementLike[],
   confirmUploadAll: (message: string) => boolean,
-): readonly (ExcalidrawElementLike & { fileId: string })[] {
+): readonly ExcalidrawImageElementLike[] {
   if (selected.length > 0) return selected;
   if (allImages.length === 0) return [];
   return confirmUploadAll(
@@ -486,7 +494,7 @@ function chooseImages(
 
 function getLocalCandidates(
   automate: ExcalidrawAutomateLike,
-  elements: readonly (ExcalidrawElementLike & { fileId: string })[],
+  elements: readonly ExcalidrawImageElementLike[],
 ): UploadCandidate[] {
   const candidates = new Map<string, UploadCandidate>();
   for (const element of elements) {
@@ -499,6 +507,24 @@ function getLocalCandidates(
     }
   }
   return [...candidates.values()];
+}
+
+/** Finds the image Excalidraw inserted for a paste, once it is in the scene. */
+function findPastedImage(
+  target: DrawingTarget,
+  beforeElementIds: ReadonlySet<string>,
+): ExcalidrawImageElementLike | undefined {
+  try {
+    return queryDrawing(target.host, target.view, (automate) =>
+      automate
+        .getViewElements()
+        .filter(isExcalidrawImageElement)
+        .find((element) => !beforeElementIds.has(element.id)),
+    );
+  } catch {
+    // The view may be in the middle of an update; the watcher polls again.
+    return undefined;
+  }
 }
 
 function getNotePath(view: unknown): string | undefined {
