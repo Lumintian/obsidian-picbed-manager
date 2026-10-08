@@ -17,5 +17,6 @@ export interface ReferenceAdapter<TContext> {
     context: TContext,
     anchor: ReferenceAnchor,
     error: UploadError,
+    job: UploadJob,
   ): Promise<void>;
 }

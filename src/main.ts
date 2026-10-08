@@ -11,9 +11,11 @@ import { migratePersistedState, type PersistedState } from "./persistence/state"
 import { CustomApiAdapter } from "./providers/custom-api/adapter";
 import { obsidianTransport } from "./providers/custom-api/obsidian-transport";
 import {
+  describeUnfinishedPaste,
   MarkdownReferenceAdapter,
   type MarkdownReferenceContext,
 } from "./references/markdown-adapter";
+import { createObsidianNoteAccess } from "./references/obsidian-note-access";
 import { ExcalidrawUploader } from "./integrations/excalidraw-uploader";
 import { createId } from "./shared/id";
 import { PicbedManagerSettingTab } from "./settings/settings-tab";
@@ -36,7 +38,7 @@ export default class PicbedManagerPlugin extends Plugin {
     const provider = new CustomApiAdapter(obsidianTransport);
     this.coordinator = new UploadCoordinator(
       provider,
-      new MarkdownReferenceAdapter(),
+      new MarkdownReferenceAdapter(createObsidianNoteAccess(this.app)),
       callbacks,
     );
     this.excalidrawUploader = new ExcalidrawUploader(this.app, provider, {
@@ -123,9 +125,7 @@ export default class PicbedManagerPlugin extends Plugin {
     ) {
       return;
     }
-    const metadata = activeFile
-      ? this.app.metadataCache.getFileCache(activeFile)
-      : undefined;
+    const metadata = this.app.metadataCache.getFileCache(activeFile);
     if (
       !noteAllowsAutoUpload(
         metadata,
@@ -152,20 +152,21 @@ export default class PicbedManagerPlugin extends Plugin {
       };
       const context: MarkdownReferenceContext = {
         editor,
+        note: activeFile,
         altText: this.settings.behavior.preserveAltText ? source.fileName : "",
       };
       const job = this.coordinator.create(
         source,
         profile,
         context,
-        activeFile?.path,
+        activeFile.path,
       );
       const result = await this.coordinator.run(
         job.id,
         this.settings.behavior.retryCount,
       );
       if (result.status === "failed") {
-        new Notice(`Image upload failed: ${result.error?.message ?? "Unknown error"}`);
+        new Notice(describeUnfinishedPaste(result, context));
       } else if (result.status === "cancelled") {
         new Notice("Image upload cancelled.");
       }

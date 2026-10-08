@@ -4,8 +4,6 @@ Open problems found in code review, with a suggested direction for each. User-vi
 
 ## Bugs
 
-- **A failed Markdown upload loses the image.** `handlePaste` calls `preventDefault()` before uploading, so Obsidian never saves the attachment. After a failure the bytes exist only in the in-memory job. *Direction:* on failure, save the image as a normal attachment (`app.fileManager.getAvailablePathForAttachment` + `vault.createBinary`, which needs `minAppVersion` 1.5.7) or offer to.
-- **Switching notes during a Markdown upload leaves the placeholder behind.** The adapter writes through the editor captured at paste time. A tab reuses its editor for the next note, so the marker is no longer found and the job fails with `reference-conflict`, even though the image was uploaded. The status view then shows only the error, not the URL, and **Retry** uploads the image again. *Direction:* when the editor shows another file, replace the marker with `vault.process(file)`; on retry, skip the upload if `job.result` already exists; always show an uploaded URL.
 - **Retry fails for failed uploads from earlier sessions.** The status view offers **Retry** for every failed history entry, but jobs live only in memory, so after a restart it throws `Unknown upload operation`. *Direction:* offer Retry only for jobs that are still in memory.
 - **The Excalidraw command uploads embedded notes, PDF pages, and nested drawings.** These are image elements whose `getViewFileForImageElement()` returns a `.md` or `.pdf` file. They are uploaded as `application/octet-stream` and replaced with a link. *Direction:* only accept files whose extensions are in the supported image list.
 - **Excalidraw paste ignores the `picbed-auto-upload` frontmatter**, unlike Markdown notes.

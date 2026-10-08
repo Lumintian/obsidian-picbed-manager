@@ -37,8 +37,8 @@ The upload side (`ProviderAdapter`) and the document side (`ReferenceAdapter`) a
 
 1. **`create`** builds an `UploadJob`, asks the reference adapter to insert a placeholder, and keeps the operation in memory.
 2. **`run`** tries the upload up to `retryCount + 1` times. After a successful upload it first reports the asset (`onAssetCreated`, which saves it to `data.json`), then commits the link through the reference adapter. Recording the asset first means an uploaded image is never lost from the record, even if the document changed in the meantime.
-3. A failure is retried only if the error is retryable and was not a cancellation. When the attempts run out, the reference adapter's `fail` updates the placeholder, and the finished job is written to history.
-4. **`retry`** runs the same in-memory operation again with a fresh `AbortController`. Operations are kept for the whole session and are not restored after a restart.
+3. A failure is retried only if the error is retryable and was not a cancellation. When the attempts run out, the reference adapter's `fail` receives the error and the job (including the image bytes), and the finished job is written to history.
+4. **`retry`** runs the same in-memory operation again with a fresh `AbortController`. If the job already has an upload result, only the commit is retried, so the image is not uploaded twice. Operations are kept for the whole session and are not restored after a restart.
 
 ### Error codes
 
@@ -71,9 +71,13 @@ All error messages pass through `redactSecrets`, which replaces the values of he
 
 ## Markdown references
 
-The placeholder is a single line, `⏳ <status text> <!-- picbed-manager-upload:<jobId> -->`. The HTML comment carries a unique token, is invisible in Reading view, and loads no resources.
+The placeholder is a single line, `⏳ <status text> <!-- picbed-manager-upload:<jobId> -->`. The HTML comment carries a unique token, is invisible in Reading view, and loads no resources. The adapter finds the placeholder by that token and replaces everything from the `⏳ ` before it to the end of that line.
 
-`commit` and `fail` search the editor's full text for the token. They replace everything from the `⏳ ` before it to the end of that line with the image link or the failure text. If the token is gone, they raise `reference-conflict`. The adapter writes through the `Editor` captured at paste time, so it only finds the marker while that editor still shows the same note.
+**Where edits go.** `MarkdownReferenceAdapter` talks to Obsidian through `MarkdownNoteAccess` (implemented in `obsidian-note-access.ts`). The context holds the note's `TFile`, so renames are followed. Every edit first looks for an editor that shows the note, preferring the one the image was pasted into, because editing through it keeps undo history and any unsaved changes. A tab reuses its editor when it switches notes, so when no editor shows the note any more, the adapter rewrites the file with `vault.process`. A missing token, or a note that was deleted, raises `reference-conflict`.
+
+**Failure fallback.** `fail` saves the pasted bytes as a normal attachment (`fileManager.getAvailablePathForAttachment`, `vault.createBinary`, named `Pasted image <timestamp>`) and replaces the placeholder with an embed from `fileManager.generateMarkdownLink`, which follows the user's link settings. The embed is remembered in the context, so a later successful retry replaces it with the hosted link and a failed retry leaves it alone. Nothing is saved if the placeholder is already gone. If the attachment cannot be written, the placeholder becomes `⏳ Upload failed: … — <reason>` instead.
+
+`describeUnfinishedPaste` turns a finished job into the notice text: uploaded but not inserted, saved locally, or failed.
 
 ## Excalidraw integration
 

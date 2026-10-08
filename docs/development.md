@@ -50,7 +50,7 @@ Tests live in `tests/*.test.ts` and run in Vitest's Node environment.
 
 Unit tests cannot prove the integration with a running Obsidian and Excalidraw. Before a release, check in a test vault:
 
-- Markdown: paste an image (link inserted); paste with the API unreachable (failure placeholder, then **Retry** in the status view); a note with `picbed-auto-upload: false`.
+- Markdown: paste an image (link inserted); paste with the API unreachable (a local attachment is embedded, then **Retry** in the status view swaps in the hosted link); paste and switch the tab to another note before the upload finishes (the link lands in the original note); a note with `picbed-auto-upload: false`.
 - Excalidraw: paste an image (it switches to the hosted URL); paste two images quickly (both upload); move an uploaded image, then paste another (the first stays where you moved it); paste in one drawing, then in another (no images move between drawings); run the upload command with a selection and with nothing selected.
 - Mobile, if the change touches uploading or the paste handlers.
 

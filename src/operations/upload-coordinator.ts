@@ -1,4 +1,4 @@
-import type { AssetRecord, AssetSource } from "../domain/asset";
+import type { AssetRecord, AssetResult, AssetSource } from "../domain/asset";
 import { UploadError, toUploadError } from "../domain/errors";
 import type { ProviderAdapter } from "../domain/provider";
 import type { ReferenceAdapter, ReferenceAnchor } from "../domain/reference";
@@ -73,20 +73,9 @@ export class UploadCoordinator<TContext> {
       await this.callbacks.onJobChanged(operation.job);
 
       try {
-        const result = await this.provider.upload(
-          operation.source,
-          operation.profile,
-          operation.controller.signal,
-        );
-        operation.job.result = result;
-        operation.job.updatedAt = this.now().toISOString();
-        await this.callbacks.onAssetCreated({
-          ...result,
-          sourceId: operation.source.sourceId,
-          fileName: operation.source.fileName,
-          notePath: operation.job.notePath,
-          createdAt: operation.job.updatedAt,
-        });
+        // A job that already uploaded only failed to insert its link, so a
+        // retry inserts the link again instead of uploading a duplicate.
+        const result = operation.job.result ?? (await this.upload(operation));
         await this.reference.commit(operation.context, operation.anchor, result);
         operation.job.status = "succeeded";
         operation.job.updatedAt = this.now().toISOString();
@@ -109,7 +98,12 @@ export class UploadCoordinator<TContext> {
     operation.job.status = failure.code === "cancelled" ? "cancelled" : "failed";
     operation.job.updatedAt = this.now().toISOString();
     try {
-      await this.reference.fail(operation.context, operation.anchor, failure);
+      await this.reference.fail(
+        operation.context,
+        operation.anchor,
+        failure,
+        operation.job,
+      );
     } catch (referenceError) {
       const normalizedReferenceError = toUploadError(referenceError);
       if (normalizedReferenceError.code !== "reference-conflict") {
@@ -136,6 +130,26 @@ export class UploadCoordinator<TContext> {
 
   getJobs(): UploadJob[] {
     return [...this.operations.values()].map((operation) => operation.job);
+  }
+
+  private async upload(
+    operation: ActiveOperation<TContext>,
+  ): Promise<AssetResult> {
+    const result = await this.provider.upload(
+      operation.source,
+      operation.profile,
+      operation.controller.signal,
+    );
+    operation.job.result = result;
+    operation.job.updatedAt = this.now().toISOString();
+    await this.callbacks.onAssetCreated({
+      ...result,
+      sourceId: operation.source.sourceId,
+      fileName: operation.source.fileName,
+      notePath: operation.job.notePath,
+      createdAt: operation.job.updatedAt,
+    });
+    return result;
   }
 
   private requireOperation(jobId: string): ActiveOperation<TContext> {

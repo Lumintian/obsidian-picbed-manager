@@ -59,6 +59,54 @@ describe("UploadCoordinator", () => {
     expect(completed.result?.url).toBe(result.url);
     expect(onAssetCreated).toHaveBeenCalledOnce();
   });
+
+  it("retries only the link insertion after the image was uploaded", async () => {
+    const upload = vi.fn(async () => result);
+    const reference = createReference();
+    reference.commit = vi
+      .fn()
+      .mockRejectedValueOnce(new UploadError("reference-conflict", "marker removed"))
+      .mockResolvedValueOnce(undefined);
+    const onAssetCreated = vi.fn();
+    const coordinator = new UploadCoordinator(
+      { kind: "custom-api", upload },
+      reference,
+      { onJobChanged: vi.fn(), onAssetCreated, onHistory: vi.fn() },
+    );
+    const job = coordinator.create(source, configuredProfile(), {});
+    await coordinator.run(job.id, 0);
+
+    const retried = await coordinator.retry(job.id, 0);
+
+    expect(retried.status).toBe("succeeded");
+    expect(upload).toHaveBeenCalledOnce();
+    expect(onAssetCreated).toHaveBeenCalledOnce();
+    expect(reference.commit).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the failed job to the reference adapter", async () => {
+    const reference = createReference();
+    const coordinator = new UploadCoordinator(
+      {
+        kind: "custom-api",
+        upload: vi.fn(async () => {
+          throw new UploadError("http", "Upload API returned HTTP 400.");
+        }),
+      },
+      reference,
+      { onJobChanged: vi.fn(), onAssetCreated: vi.fn(), onHistory: vi.fn() },
+    );
+    const job = coordinator.create(source, configuredProfile(), {});
+
+    await coordinator.run(job.id, 0);
+
+    expect(reference.fail).toHaveBeenCalledWith(
+      {},
+      { token: "marker" },
+      expect.objectContaining({ code: "http" }),
+      expect.objectContaining({ id: job.id, source }),
+    );
+  });
 });
 
 function configuredProfile() {

@@ -15,7 +15,7 @@ Picbed Manager uploads the images you paste into Obsidian to your own image host
 
 ## Installation
 
-Picbed Manager requires Obsidian 1.5.0 or later.
+Picbed Manager requires Obsidian 1.5.7 or later.
 
 **Manual installation**
 
@@ -46,7 +46,9 @@ When **Upload pasted images** is on, pasting a single image into a note:
 2. Uploads the image with your default profile.
 3. Replaces the placeholder with `![image.png](https://your.host/…)`.
 
-If the upload fails, the placeholder changes to `⏳ Upload failed: image.png — <reason>`. You can retry it from the [upload status view](#upload-status) while Obsidian stays open, or delete the placeholder and paste again. Do not edit the placeholder while an upload is running; Picbed Manager uses it to find where the link goes.
+If the upload fails, the image is saved to your vault as a normal attachment, named like any image pasted into Obsidian, and embedded where the placeholder was, so nothing is lost. To upload it later, use **Retry** in the [upload status view](#upload-status) while Obsidian stays open; a successful retry replaces the local embed with the hosted link and keeps the attachment file.
+
+You can keep working while an image uploads, including switching the tab to another note; the link still goes into the note you pasted into. Do not edit or delete the placeholder, though: Picbed Manager uses it to find where the link goes. If the placeholder is gone when the upload finishes, the link is not inserted and the image is not saved locally.
 
 Supported image types: PNG, JPEG, GIF, WebP, SVG, AVIF, BMP, and TIFF. Pasting several files at once, or pasting where Picbed Manager does not handle images (see [Known limitations](#known-limitations)), keeps Obsidian's normal behavior.
 
@@ -156,8 +158,7 @@ If your server does not return `publicUrl`, either use `src` with **Response URL
 
 - One image per paste. Drag and drop is not supported.
 - Paste in Canvas cards and in embedded or pop-up editors uses Obsidian's normal behavior and is not uploaded.
-- In Markdown notes, a failed upload does not save the image to your vault. Retry it from the status view before restarting Obsidian, or paste it again. After a restart, **Retry** does not work for older failed uploads.
-- If you switch the tab to another note, or edit the placeholder, before an upload finishes, the link is not inserted and the placeholder stays.
+- After a restart, **Retry** does not work for older failed uploads.
 - In Excalidraw, the `picbed-auto-upload` frontmatter setting is ignored.
 - The Excalidraw command can also pick up embedded notes, PDF pages, and other drawings, which are shown as images. Select only the images you want to upload instead of uploading everything.
 - A request that times out may still finish on the server, so a retry can leave a duplicate copy on your image host.
