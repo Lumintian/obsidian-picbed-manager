@@ -42,6 +42,7 @@ export default class PicbedManagerPlugin extends Plugin {
     this.excalidrawUploader = new ExcalidrawUploader(this.app, provider, {
       getProfile: () => this.getDefaultProfile(),
       getRetryCount: () => this.settings.behavior.retryCount,
+      autoUploadOnPaste: () => this.settings.behavior.autoUploadOnPaste,
       callbacks,
       notify: (message) => new Notice(message),
     });
@@ -53,19 +54,33 @@ export default class PicbedManagerPlugin extends Plugin {
     this.addCommand({
       id: "upload-excalidraw-images",
       name: "Upload images in current Excalidraw drawing",
-      checkCallback: (checking) => {
-        const canRun = this.excalidrawUploader.canRun();
-        if (canRun && !checking) {
-          void this.excalidrawUploader.uploadCurrentDrawing();
-        }
-        return canRun;
+      callback: () => {
+        void this.excalidrawUploader.uploadCurrentDrawing();
       },
     });
+    this.excalidrawUploader.registerPasteHook();
+    this.app.workspace.onLayoutReady(() => {
+      this.excalidrawUploader.registerPasteHook();
+    });
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        this.excalidrawUploader.registerPasteHook();
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.excalidrawUploader.registerPasteHook();
+      }),
+    );
     this.registerEvent(
       this.app.workspace.on("editor-paste", (event, editor, info) => {
         void this.handlePaste(event, editor, info);
       }),
     );
+  }
+
+  onunload(): void {
+    this.excalidrawUploader?.dispose();
   }
 
   async saveState(): Promise<void> {

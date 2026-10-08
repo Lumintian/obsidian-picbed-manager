@@ -3,7 +3,7 @@
   "name": "Picbed Manager",
   "version": "0.2.0",
   "minAppVersion": "1.5.0",
-  "description": "Upload pasted images to configurable custom image hosting APIs.",
+  "description": "Upload pasted images and Excalidraw images to configurable custom image hosting APIs.",
   "author": "Lumintian",
   "isDesktopOnly": false
 }

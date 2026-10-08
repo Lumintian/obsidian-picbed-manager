@@ -19,8 +19,22 @@ export interface ExcalidrawImageInfoLike {
   [key: string]: unknown;
 }
 
+export interface ExcalidrawPasteHookData {
+  ea: ExcalidrawAutomateLike;
+  payload: unknown;
+  event: ClipboardEvent;
+  excalidrawFile: TFile;
+  view: unknown;
+  pointerPosition: { x: number; y: number };
+}
+
+export type ExcalidrawPasteHook = (
+  data: ExcalidrawPasteHookData,
+) => boolean | void;
+
 /** The public ExcalidrawAutomate methods used by Picbed Manager. */
 export interface ExcalidrawAutomateLike {
+  onPasteHook?: ExcalidrawPasteHook | null;
   setView(view: unknown): unknown;
   getViewSelectedElements(includeFrameChildren?: boolean): readonly ExcalidrawElementLike[];
   getViewElements(): readonly ExcalidrawElementLike[];

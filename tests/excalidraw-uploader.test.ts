@@ -166,6 +166,79 @@ describe("ExcalidrawUploader", () => {
     expect(automate.addElementsToView).not.toHaveBeenCalled();
   });
 
+  it("chains an existing paste hook and restores it on dispose", () => {
+    const element = { id: "element-1", type: "image", fileId: "file-1" };
+    const automate = createAutomate(element);
+    const previous = vi.fn(() => true);
+    automate.onPasteHook = previous;
+    const uploader = createUploader(createApp(automate), vi.fn(async () => uploadedResult));
+
+    expect(uploader.registerPasteHook()).toBe(true);
+    const hook = automate.onPasteHook;
+    expect(hook).toBeTypeOf("function");
+    expect(
+      hook?.({
+        ea: automate,
+        payload: {},
+        event: { clipboardData: null } as ClipboardEvent,
+        excalidrawFile: file,
+        view: {},
+        pointerPosition: { x: 0, y: 0 },
+      }),
+    ).toBe(true);
+    expect(previous).toHaveBeenCalledOnce();
+
+    uploader.dispose();
+    expect(automate.onPasteHook).toBe(previous);
+  });
+
+  it("lets native image paste happen, then uploads the new local element", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldElement = { id: "element-1", type: "image", fileId: "file-1" };
+      const newElement = { id: "element-2", type: "image", fileId: "file-2" };
+      const elements = [oldElement] as (typeof oldElement | typeof newElement)[];
+      const automate = createAutomate(oldElement);
+      automate.getViewElements = vi.fn(() => elements);
+      automate.getElement = vi.fn((id) => elements.find((element) => element.id === id));
+      automate.getViewFileForImageElement = vi.fn(() => file);
+      automate.imagesDict["file-2"] = {
+        id: "file-2",
+        file,
+      };
+      const clipboardFile = { name: "pasted.png", type: "image/png" } as File;
+      const clipboardData = {
+        files: { length: 1, item: () => clipboardFile },
+      } as unknown as DataTransfer;
+      const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
+      const uploader = createUploader(createApp(automate), upload);
+
+      expect(uploader.registerPasteHook()).toBe(true);
+      const result = automate.onPasteHook?.({
+        ea: automate,
+        payload: {},
+        event: { clipboardData } as ClipboardEvent,
+        excalidrawFile: file,
+        view: {},
+        pointerPosition: { x: 0, y: 0 },
+      });
+      expect(result).toBe(true);
+
+      // This represents Excalidraw's native paste completing after the hook.
+      elements.push(newElement);
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(upload).toHaveBeenCalledOnce();
+      expect(automate.imagesDict["file-2"]).toMatchObject({
+        file: null,
+        isHyperLink: true,
+        hyperlink: uploadedResult.url,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not run when the Excalidraw plugin is unavailable", async () => {
     const element = { id: "element-1", type: "image", fileId: "file-1" };
     const automate = createAutomate(element);

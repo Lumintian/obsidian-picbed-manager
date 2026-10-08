@@ -49,7 +49,7 @@ export class PicbedManagerSettingTab extends PluginSettingTab {
 
     new Setting(this.containerEl)
       .setName("Upload pasted images")
-      .setDesc("Automatically upload a single image pasted into a Markdown note.")
+      .setDesc("Automatically upload a single image pasted into a Markdown note or Excalidraw.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.behavior.autoUploadOnPaste)

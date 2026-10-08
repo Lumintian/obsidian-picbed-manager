@@ -1,6 +1,7 @@
 import type { App, TFile } from "obsidian";
 import type { AssetSource } from "../domain/asset";
 import type { ProviderAdapter } from "../domain/provider";
+import { getSingleSupportedImage } from "../ingestion/paste-policy";
 import type { UploadCoordinatorCallbacks } from "../operations/upload-coordinator";
 import { UploadCoordinator } from "../operations/upload-coordinator";
 import {
@@ -8,12 +9,15 @@ import {
   isExcalidrawImageElement,
   type ExcalidrawAutomateLike,
   type ExcalidrawElementLike,
+  type ExcalidrawPasteHook,
   type ExcalidrawReferenceContext,
 } from "../references/excalidraw-adapter";
 import { createId } from "../shared/id";
 import type { UploadProfile } from "../settings/model";
 
 export const EXCALIDRAW_PLUGIN_ID = "obsidian-excalidraw-plugin";
+const PASTE_POLL_ATTEMPTS = 20;
+const PASTE_POLL_DELAY_MS = 50;
 
 interface PluginManagerLike {
   plugins?: Record<string, unknown>;
@@ -26,6 +30,7 @@ type AppWithPluginManager = App & {
 
 interface ExcalidrawPluginLike {
   getAPI?: () => ExcalidrawAutomateLike;
+  ea?: ExcalidrawAutomateLike;
 }
 
 interface ActiveExcalidrawViewLike {
@@ -53,21 +58,26 @@ export interface ExcalidrawUploadSummary {
 export interface ExcalidrawUploaderOptions {
   getProfile(): UploadProfile | undefined;
   getRetryCount(): number;
+  autoUploadOnPaste?: () => boolean;
   callbacks: UploadCoordinatorCallbacks;
   notify?: (message: string) => void;
   confirmUploadAll?: (message: string) => boolean;
 }
 
 /**
- * Integrates with Excalidraw from the outside, using only its public
- * ExcalidrawAutomate API. The integration is command-driven and therefore
- * does not replace Excalidraw's own paste/drop handlers.
+ * Integrates with Excalidraw from the outside, using its public
+ * ExcalidrawAutomate API. The command handles existing images, while the
+ * paste hook lets Excalidraw finish its native paste before uploading the new
+ * local image. That preserves the local image as a fallback on failure.
  */
 export class ExcalidrawUploader {
   private readonly coordinator: UploadCoordinator<ExcalidrawReferenceContext>;
   private readonly notify: (message: string) => void;
   private readonly confirmUploadAll: (message: string) => boolean;
   private running = false;
+  private hookHost: ExcalidrawAutomateLike | undefined;
+  private previousPasteHook: ExcalidrawPasteHook | null | undefined;
+  private pasteHook: ExcalidrawPasteHook | undefined;
 
   constructor(
     private readonly app: App,
@@ -85,7 +95,71 @@ export class ExcalidrawUploader {
   }
 
   canRun(): boolean {
-    return !this.running && !!getActiveExcalidrawView(this.app) && !!getExcalidrawPlugin(this.app);
+    return (
+      !this.running &&
+      !!getActiveExcalidrawView(this.app) &&
+      !!getExcalidrawPlugin(this.app)
+    );
+  }
+
+  /** Registers the optional Excalidraw paste hook once the dependency is ready. */
+  registerPasteHook(): boolean {
+    const host = getExcalidrawHookHost(this.app);
+    if (!host) return false;
+    if (this.hookHost === host) {
+      return host.onPasteHook === this.pasteHook;
+    }
+
+    this.restorePasteHook();
+    const previous = host.onPasteHook;
+    const hook: ExcalidrawPasteHook = (data) => {
+      let previousResult: boolean | void;
+      try {
+        previousResult = previous?.(data);
+      } catch {
+        // A third-party hook must not prevent Excalidraw's native paste.
+        return true;
+      }
+      if (previousResult === false) return false;
+      if (!this.isAutomaticPasteUploadEnabled()) {
+        return previousResult ?? true;
+      }
+      if (!this.options.getProfile()?.endpoint.trim()) {
+        return previousResult ?? true;
+      }
+      if (!getSingleSupportedImage(data.event?.clipboardData ?? null)) {
+        return previousResult ?? true;
+      }
+
+      try {
+        data.ea.setView(data.view);
+        const beforeElementIds = new Set(
+          data.ea.getViewElements().map((element) => element.id),
+        );
+        this.schedulePastedImageUpload(data.ea, data.view, beforeElementIds);
+      } catch {
+        return previousResult ?? true;
+      }
+
+      // Let Excalidraw create its normal local image first. The scheduled
+      // upload replaces that image reference only after it exists in the scene.
+      return true;
+    };
+
+    try {
+      host.onPasteHook = hook;
+    } catch {
+      return false;
+    }
+    this.hookHost = host;
+    this.previousPasteHook = previous;
+    this.pasteHook = hook;
+    return true;
+  }
+
+  /** Restores a hook owned by another script/plugin when Picbed unloads. */
+  dispose(): void {
+    this.restorePasteHook();
   }
 
   async uploadCurrentDrawing(): Promise<ExcalidrawUploadSummary> {
@@ -139,26 +213,13 @@ export class ExcalidrawUploader {
         return summary;
       }
 
-      const prepared = await this.readCandidates(candidates, summary);
-      if (prepared.length === 0) {
-        this.notify("No readable local Excalidraw images were found.");
-        return summary;
-      }
-
-      automate.copyViewElementsToEAforEditing(
-        prepared.map((candidate) => candidate.element),
-        true,
+      await this.uploadCandidates(
+        automate,
+        view.file?.path,
+        profile,
+        candidates,
+        summary,
       );
-      for (const candidate of prepared) {
-        await this.uploadCandidate(
-          automate,
-          view.file?.path,
-          profile,
-          candidate,
-          summary,
-        );
-      }
-
       this.reportSummary(summary);
       return summary;
     } catch (error) {
@@ -183,6 +244,128 @@ export class ExcalidrawUploader {
 
   async retry(jobId: string, retryCount: number) {
     return this.coordinator.retry(jobId, retryCount);
+  }
+
+  private schedulePastedImageUpload(
+    automate: ExcalidrawAutomateLike,
+    view: unknown,
+    beforeElementIds: ReadonlySet<string>,
+    attempt = 0,
+  ): void {
+    const poll = (): void => {
+      if (!this.isAutomaticPasteUploadEnabled()) return;
+      try {
+        automate.setView(view);
+        const newImages = automate
+          .getViewElements()
+          .filter((element) => !beforeElementIds.has(element.id))
+          .filter(isExcalidrawImageElement);
+        if (newImages.length > 0) {
+          const candidates = getLocalCandidates(automate, newImages);
+          if (candidates.length > 0) {
+            if (this.running) {
+              if (attempt < PASTE_POLL_ATTEMPTS) {
+                setTimeout(
+                  () =>
+                    this.schedulePastedImageUpload(
+                      automate,
+                      view,
+                      beforeElementIds,
+                      attempt + 1,
+                    ),
+                  PASTE_POLL_DELAY_MS,
+                );
+              }
+              return;
+            }
+            const profile = this.options.getProfile();
+            if (!profile || !profile.endpoint.trim()) return;
+            void this.uploadPastedCandidates(
+              automate,
+              getNotePath(view),
+              profile,
+              candidates,
+            );
+            return;
+          }
+        }
+      } catch {
+        // The view may still be creating the pasted file; poll again below.
+      }
+
+      if (attempt < PASTE_POLL_ATTEMPTS) {
+        setTimeout(
+          () =>
+            this.schedulePastedImageUpload(
+              automate,
+              view,
+              beforeElementIds,
+              attempt + 1,
+            ),
+          PASTE_POLL_DELAY_MS,
+        );
+      }
+    };
+
+    setTimeout(poll, attempt === 0 ? 0 : PASTE_POLL_DELAY_MS);
+  }
+
+  private async uploadPastedCandidates(
+    automate: ExcalidrawAutomateLike,
+    notePath: string | undefined,
+    profile: UploadProfile,
+    candidates: readonly UploadCandidate[],
+  ): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    const summary = createEmptySummary();
+    summary.total = candidates.length;
+    try {
+      await this.uploadCandidates(
+        automate,
+        notePath,
+        profile,
+        candidates,
+        summary,
+      );
+      this.reportSummary(summary);
+    } catch (error) {
+      this.notify(
+        `Excalidraw pasted image upload failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async uploadCandidates(
+    automate: ExcalidrawAutomateLike,
+    notePath: string | undefined,
+    profile: UploadProfile,
+    candidates: readonly UploadCandidate[],
+    summary: ExcalidrawUploadSummary,
+  ): Promise<void> {
+    const prepared = await this.readCandidates(candidates, summary);
+    if (prepared.length === 0) {
+      this.notify("No readable local Excalidraw images were found.");
+      return;
+    }
+
+    automate.copyViewElementsToEAforEditing(
+      prepared.map((candidate) => candidate.element),
+      true,
+    );
+    for (const candidate of prepared) {
+      await this.uploadCandidate(
+        automate,
+        notePath,
+        profile,
+        candidate,
+        summary,
+      );
+    }
   }
 
   private async readCandidates(
@@ -254,6 +437,22 @@ export class ExcalidrawUploader {
       this.notify("No Excalidraw images were uploaded.");
     }
   }
+
+  private isAutomaticPasteUploadEnabled(): boolean {
+    return this.options.autoUploadOnPaste?.() ?? true;
+  }
+
+  private restorePasteHook(): void {
+    if (
+      this.hookHost &&
+      this.hookHost.onPasteHook === this.pasteHook
+    ) {
+      this.hookHost.onPasteHook = this.previousPasteHook ?? null;
+    }
+    this.hookHost = undefined;
+    this.previousPasteHook = undefined;
+    this.pasteHook = undefined;
+  }
 }
 
 export function getActiveExcalidrawView(
@@ -270,22 +469,36 @@ export function getExcalidrawPlugin(
   app: App,
 ): ExcalidrawPluginLike | undefined {
   const manager = (app as AppWithPluginManager).plugins;
-  const plugin = manager?.plugins?.[EXCALIDRAW_PLUGIN_ID] ?? manager?.getPlugin?.(EXCALIDRAW_PLUGIN_ID);
+  const plugin =
+    manager?.plugins?.[EXCALIDRAW_PLUGIN_ID] ??
+    manager?.getPlugin?.(EXCALIDRAW_PLUGIN_ID);
   if (typeof plugin !== "object" || plugin === null) return undefined;
   const excalidrawPlugin = plugin as ExcalidrawPluginLike;
-  return typeof excalidrawPlugin.getAPI === "function"
+  return typeof excalidrawPlugin.getAPI === "function" || excalidrawPlugin.ea
     ? excalidrawPlugin
     : undefined;
 }
 
 function getExcalidrawAutomate(app: App): ExcalidrawAutomateLike | undefined {
   const plugin = getExcalidrawPlugin(app);
-  if (!plugin?.getAPI) return undefined;
-  try {
-    return plugin.getAPI();
-  } catch {
-    return undefined;
+  if (!plugin) return undefined;
+  if (plugin.getAPI) {
+    try {
+      const automate = plugin.getAPI();
+      if (automate) return automate;
+    } catch {
+      // Fall back to the plugin's shared automation instance below.
+    }
   }
+  return plugin.ea;
+}
+
+function getExcalidrawHookHost(
+  app: App,
+): ExcalidrawAutomateLike | undefined {
+  const plugin = getExcalidrawPlugin(app);
+  if (!plugin) return undefined;
+  return plugin.ea ?? getExcalidrawAutomate(app);
 }
 
 function chooseImages(
@@ -317,6 +530,12 @@ function getLocalCandidates(
     }
   }
   return [...candidates.values()];
+}
+
+function getNotePath(view: unknown): string | undefined {
+  if (typeof view !== "object" || view === null) return undefined;
+  const file = (view as ActiveExcalidrawViewLike).file;
+  return file?.path;
 }
 
 function mimeTypeForExtension(extension: string): string {
