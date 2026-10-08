@@ -24,12 +24,12 @@ The upload side (`ProviderAdapter`) and the document side (`ReferenceAdapter`) a
 | `src/ingestion/paste-policy.ts` | Decides which clipboard contents qualify (exactly one supported image) and applies the `picbed-auto-upload` frontmatter override. |
 | `src/operations/upload-coordinator.ts` | Runs one upload job from placeholder to link, including retries. |
 | `src/providers/custom-api/` | The Custom Upload API provider: request building, the multipart body, headers and secret redaction, JSON path selection, and the Obsidian `requestUrl` transport. |
-| `src/references/` | `markdown-adapter.ts` (placeholder markers in the editor) and `excalidraw-adapter.ts` (ExcalidrawAutomate types and the image-to-link commit). |
+| `src/references/` | `markdown-adapter.ts` (placeholders, links, and the local fallback in notes), `obsidian-note-access.ts` (its Obsidian workspace and vault operations), and `excalidraw-adapter.ts` (ExcalidrawAutomate types and the image-to-link commit). |
 | `src/integrations/excalidraw-uploader.ts` | Finds the Excalidraw plugin, owns the paste hook and watcher, implements the upload command, and runs Excalidraw uploads through one queue. |
 | `src/settings/` | Settings model and defaults, migration, profile validation, field help texts, and the settings tab. |
 | `src/persistence/state.ts` | The shape of `data.json` and its migration. |
 | `src/ui/status-modal.ts` | The upload status view. |
-| `src/shared/id.ts` | ID generation. |
+| `src/shared/` | ID generation and the supported image formats (`image-types.ts`), shared by the paste policy and the Excalidraw command. |
 
 ## Upload lifecycle
 
@@ -110,7 +110,7 @@ These come from reading the Excalidraw plugin source (`src/shared/ExcalidrawAuto
 
 ### Command flow
 
-The command reads the selection (or, after confirmation, all images) immediately, then queues the upload. When the queued task starts, it resolves each element to its vault file, so images that earlier queued work already switched to links are skipped. It reads the files and uploads them one at a time.
+The command reads the selection (or, after confirmation, all images) immediately, then queues the upload. When the queued task starts, it resolves each element to its vault file, so images that earlier queued work already switched to links are skipped. Embedded notes, PDF pages, and nested drawings are image elements too, so files whose extension is not a supported image format are skipped as well. It reads the remaining files and uploads them one at a time.
 
 ## Persisted data
 

@@ -67,7 +67,7 @@ Use `true` to upload in that note even when **Upload pasted images** is off.
 With the Excalidraw plugin enabled:
 
 - **Paste:** a single pasted image is uploaded automatically. Excalidraw inserts it as usual, and once the upload finishes the image points to the hosted URL. If the upload fails, the image stays in the drawing as a normal local image. Images pasted while another upload is running wait their turn.
-- **Command:** run **Picbed Manager: Upload images in current Excalidraw drawing** from the command palette to upload the selected images. If nothing is selected, you are asked whether to upload every image in the drawing. Images that already use a web link are left alone, and the original files stay in your vault.
+- **Command:** run **Picbed Manager: Upload images in current Excalidraw drawing** from the command palette to upload the selected images. If nothing is selected, you are asked whether to upload every image in the drawing. Images that already use a web link are left alone, and so are embedded notes, PDF pages, and other drawings. The original image files stay in your vault.
 
 ### Upload status
 
@@ -160,7 +160,6 @@ If your server does not return `publicUrl`, either use `src` with **Response URL
 - Paste in Canvas cards and in embedded or pop-up editors uses Obsidian's normal behavior and is not uploaded.
 - Failed uploads can be retried only until Obsidian restarts.
 - In Excalidraw, the `picbed-auto-upload` frontmatter setting is ignored.
-- The Excalidraw command can also pick up embedded notes, PDF pages, and other drawings, which are shown as images. Select only the images you want to upload instead of uploading everything.
 - A request that times out may still finish on the server, so a retry can leave a duplicate copy on your image host.
 - Removing a link does not delete the image from your image host.
 

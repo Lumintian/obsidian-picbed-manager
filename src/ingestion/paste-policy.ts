@@ -1,15 +1,5 @@
 import type { CachedMetadata } from "obsidian";
-
-export const SUPPORTED_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/bmp",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/svg+xml",
-  "image/tiff",
-  "image/webp",
-]);
+import { SUPPORTED_IMAGE_MIME_TYPES } from "../shared/image-types";
 
 export function getSingleSupportedImage(
   clipboardData: DataTransfer | null,

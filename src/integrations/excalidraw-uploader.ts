@@ -14,6 +14,7 @@ import {
   type ExcalidrawReferenceContext,
 } from "../references/excalidraw-adapter";
 import { createId } from "../shared/id";
+import { imageMimeTypeForExtension } from "../shared/image-types";
 import type { UploadProfile } from "../settings/model";
 
 export const EXCALIDRAW_PLUGIN_ID = "obsidian-excalidraw-plugin";
@@ -45,6 +46,7 @@ type ExcalidrawImageElementLike = ExcalidrawElementLike & { fileId: string };
 interface UploadCandidate {
   element: ExcalidrawImageElementLike;
   file: TFile;
+  mimeType: string;
 }
 
 interface PreparedCandidate extends UploadCandidate {
@@ -335,7 +337,7 @@ export class ExcalidrawUploader {
     summary.skipped += elements.length - candidates.length;
     if (candidates.length === 0) {
       this.notify(
-        "No local Excalidraw images are available to upload. Existing external image links were left unchanged.",
+        "No local Excalidraw images are available to upload. Web links, embedded notes, and PDF pages were left unchanged.",
       );
       return;
     }
@@ -350,7 +352,7 @@ export class ExcalidrawUploader {
       const source: AssetSource = {
         sourceId: createId("source"),
         fileName: candidate.file.name,
-        mimeType: mimeTypeForExtension(candidate.file.extension),
+        mimeType: candidate.mimeType,
         bytes: candidate.bytes,
         origin: "excalidraw",
       };
@@ -501,7 +503,11 @@ function getLocalCandidates(
     if (candidates.has(element.fileId)) continue;
     try {
       const file = automate.getViewFileForImageElement(element);
-      if (file) candidates.set(element.fileId, { element, file });
+      // Embedded notes, PDF pages, and nested drawings are image elements too.
+      const mimeType = file && imageMimeTypeForExtension(file.extension);
+      if (file && mimeType) {
+        candidates.set(element.fileId, { element, file, mimeType });
+      }
     } catch {
       // An external hyperlink or an image removed during the command is skipped.
     }
@@ -531,22 +537,6 @@ function getNotePath(view: unknown): string | undefined {
   if (typeof view !== "object" || view === null) return undefined;
   const file = (view as ActiveExcalidrawViewLike).file;
   return file?.path;
-}
-
-function mimeTypeForExtension(extension: string): string {
-  const mimeTypes: Record<string, string> = {
-    avif: "image/avif",
-    bmp: "image/bmp",
-    gif: "image/gif",
-    jpeg: "image/jpeg",
-    jpg: "image/jpeg",
-    png: "image/png",
-    svg: "image/svg+xml",
-    tif: "image/tiff",
-    tiff: "image/tiff",
-    webp: "image/webp",
-  };
-  return mimeTypes[extension.toLowerCase()] ?? "application/octet-stream";
 }
 
 function createEmptySummary(): ExcalidrawUploadSummary {

@@ -4,7 +4,6 @@ Open problems found in code review, with a suggested direction for each. User-vi
 
 ## Bugs
 
-- **The Excalidraw command uploads embedded notes, PDF pages, and nested drawings.** These are image elements whose `getViewFileForImageElement()` returns a `.md` or `.pdf` file. They are uploaded as `application/octet-stream` and replaced with a link. *Direction:* only accept files whose extensions are in the supported image list.
 - **Excalidraw paste ignores the `picbed-auto-upload` frontmatter**, unlike Markdown notes.
 - **Clearing the timeout field saves 0 seconds**, so every upload fails validation until the field is fixed. After a reload the value is clamped to 1 second. *Direction:* validate the input and keep the last valid value.
 
@@ -36,7 +35,6 @@ Open problems found in code review, with a suggested direction for each. User-vi
 - `eslint-plugin-obsidianmd` is not configured; it would catch several of the guideline issues above.
 - `getActiveExcalidrawView` uses the deprecated `workspace.activeLeaf`.
 - Unused API surface: `CustomApiAdapter.test`, `UploadCoordinator.cancel`, `ProviderAdapter.delete`, and the no-op `onJobChanged` callback.
-- Two separate image MIME tables: `SUPPORTED_IMAGE_MIME_TYPES` in `paste-policy.ts` and `mimeTypeForExtension` in `excalidraw-uploader.ts`.
 - No code formatter is configured.
 - `package.json` declares the MIT license, but the repository has no `LICENSE` file.
 - `pnpm check` runs in CI only as part of the release workflow, not on ordinary pushes or pull requests.

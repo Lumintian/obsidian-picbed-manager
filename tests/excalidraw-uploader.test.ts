@@ -158,6 +158,49 @@ describe("ExcalidrawUploader", () => {
     });
   });
 
+  it("skips embedded notes, PDF pages, and nested drawings", async () => {
+    const view = createDrawing();
+    view.addImage("image", "file-1", vaultFile("diagram.png"));
+    view.addImage("note", "file-2", vaultFile("Meeting notes.md"));
+    view.addImage("pdf", "file-3", vaultFile("Paper.pdf"));
+    view.addImage("drawing", "file-4", vaultFile("Sketch.excalidraw.md"));
+    const notify = vi.fn();
+    const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
+    const uploader = createUploader(
+      createExcalidrawApp(new FakeExcalidrawAutomate(), view),
+      upload,
+      { notify, confirmUploadAll: () => true },
+    );
+
+    const summary = await uploader.uploadCurrentDrawing();
+
+    expect(summary).toMatchObject({ total: 4, uploaded: 1, skipped: 3 });
+    expect(upload).toHaveBeenCalledOnce();
+    expect(upload.mock.calls[0]?.[0].fileName).toBe("diagram.png");
+    expect(view.files["file-2"]?.file).toEqual(vaultFile("Meeting notes.md"));
+    expect(view.files["file-3"]?.isHyperLink).toBeUndefined();
+  });
+
+  it("reports when a selection has no uploadable images", async () => {
+    const view = createDrawing();
+    view.addImage("note", "file-1", vaultFile("Meeting notes.md"));
+    view.selectedIds.add("note");
+    const notify = vi.fn();
+    const upload = vi.fn<ProviderAdapter["upload"]>(async () => uploadedResult);
+    const uploader = createUploader(
+      createExcalidrawApp(new FakeExcalidrawAutomate(), view),
+      upload,
+      { notify },
+    );
+
+    await uploader.uploadCurrentDrawing();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      "No local Excalidraw images are available to upload. Web links, embedded notes, and PDF pages were left unchanged.",
+    );
+  });
+
   it("never stages elements on the Excalidraw plugin's shared instance", async () => {
     const view = createDrawing();
     view.addImage("element-1", "file-1", vaultFile("diagram.png"));
