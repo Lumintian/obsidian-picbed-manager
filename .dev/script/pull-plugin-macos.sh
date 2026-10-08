@@ -12,7 +12,7 @@
 #
 # Usage:
 #   ./pull-plugin-macos.sh              # rsync main.js, manifest.json, styles.css
-#   ./pull-plugin-macos.sh --build      # remote npm run build, then rsync
+#   ./pull-plugin-macos.sh --build      # remote pnpm build, then rsync
 #   ./pull-plugin-macos.sh --dry-run    # print rsync plan only
 #   ./pull-plugin-macos.sh --build -n   # remote build + dry-run rsync
 #
@@ -37,7 +37,7 @@ Pull Picbed Manager artifacts from a remote build host onto macOS.
 
   ./pull-plugin-macos.sh [--build] [--dry-run|-n] [--help|-h]
 
-  --build       ssh to the build host and run `npm run build` first
+  --build       ssh to the build host and run `pnpm build` first
   --dry-run, -n rsync dry-run (no writes)
   --help, -h    show this help
 
@@ -109,7 +109,7 @@ PLUGIN_DIR="$(resolve_plugin_dir)"
 
 if [[ $DO_BUILD -eq 1 ]]; then
   print "Building on $REMOTE ..."
-  ssh "$REMOTE" "cd $(printf '%q' "$REMOTE_SRC") && npm run build"
+  ssh "$REMOTE" "cd $(printf '%q' "$REMOTE_SRC") && pnpm build"
 fi
 
 RSYNC_FLAGS=(-av)
